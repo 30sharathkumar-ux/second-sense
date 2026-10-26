@@ -104,6 +104,13 @@ class ObjectDetectorHelper(
         val modelName = when (currentModel) {
             MODEL_EFFICIENTDETV0 -> "efficientdet-lite0.tflite"
             MODEL_EFFICIENTDETV2 -> "efficientdet-lite2.tflite"
+            MODEL_CUSTOM         -> if (assetExists(CUSTOM_MODEL_FILENAME)) {
+                Log.i(TAG, "Step 7: Loading custom model '$CUSTOM_MODEL_FILENAME'")
+                CUSTOM_MODEL_FILENAME
+            } else {
+                Log.w(TAG, "Step 7: Custom model '$CUSTOM_MODEL_FILENAME' not found in assets; falling back to lite0")
+                "efficientdet-lite0.tflite"
+            }
             else -> "efficientdet-lite0.tflite"
         }
         baseOptionsBuilder.setModelAssetPath(modelName)
@@ -354,6 +361,12 @@ class ObjectDetectorHelper(
         const val DELEGATE_GPU = 1
         const val MODEL_EFFICIENTDETV0 = 0
         const val MODEL_EFFICIENTDETV2 = 1
+        /**
+         * Step 7: Slot for a custom TFLite model placed in assets/.
+         * Place your model file at: app/src/main/assets/custom_model.tflite
+         * Optionally add custom_labels.txt in the same directory.
+         */
+        const val MODEL_CUSTOM = 2
         const val MAX_RESULTS_DEFAULT = 3
         const val THRESHOLD_DEFAULT = 0.5F
         const val OTHER_ERROR = 0
@@ -364,11 +377,27 @@ class ObjectDetectorHelper(
         /** Analysis resolution target — 640×480 keeps latency low while maintaining accuracy. */
         const val ANALYSIS_WIDTH = 640
         const val ANALYSIS_HEIGHT = 480
+
+        /** Filename for the custom model asset (Step 7). */
+        const val CUSTOM_MODEL_FILENAME = "custom_model.tflite"
+        const val CUSTOM_LABELS_FILENAME = "custom_labels.txt"
     }
 
     // Used to pass results or errors back to the calling class
     interface DetectorListener {
         fun onError(error: String, errorCode: Int = OTHER_ERROR)
         fun onResults(resultBundle: ResultBundle)
+    }
+
+    /**
+     * Step 7: Checks whether [filename] exists in the app's assets directory.
+     * Used to gracefully skip loading a custom model when the file hasn't been placed yet.
+     */
+    private fun assetExists(filename: String): Boolean {
+        return try {
+            context.assets.open(filename).use { true }
+        } catch (e: Exception) {
+            false
+        }
     }
 }

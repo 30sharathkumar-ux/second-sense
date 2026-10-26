@@ -54,6 +54,7 @@
     <string-array name="models_spinner_titles">
         <item>EfficientDet Lite0</item>
         <item>EfficientDet Lite2</item>
+        <item>Custom Model</item>
     </string-array>
 
     <!-- Pair B — Alert Manager Strings -->
