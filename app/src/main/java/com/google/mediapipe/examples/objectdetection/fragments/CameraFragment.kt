@@ -17,6 +17,7 @@ package com.google.mediapipe.examples.objectdetection.fragments
 
 import android.annotation.SuppressLint
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
@@ -46,6 +47,7 @@ import com.google.mediapipe.examples.objectdetection.Messages
 import com.google.mediapipe.examples.objectdetection.ObjectDetectorHelper
 import com.google.mediapipe.examples.objectdetection.R
 import com.google.mediapipe.examples.objectdetection.SpatialLogic
+import com.google.mediapipe.examples.objectdetection.WallDetector
 import com.google.mediapipe.examples.objectdetection.databinding.FragmentCameraBinding
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import java.util.concurrent.ExecutorService
@@ -78,6 +80,12 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
 
     /** Step 3: Approach tracker — detects fast-approaching / suddenly appearing objects */
     private val approachTracker = ApproachTracker()
+
+    /** Step 6: Wall/obstacle ahead heuristic (variance-based) */
+    private val wallDetector = WallDetector()
+
+    /** Last wall-alert timestamp — used by the debug overlay to show variance. */
+    @Volatile private var lastWallVariance = Double.MAX_VALUE
 
     /** Scanning active flag — controlled by the large UI toggle button */
     @Volatile
@@ -334,8 +342,8 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
 
     /**
      * Frame analyzer: forwards every frame to the detector when scanning is active.
+     * Step 6: Also runs WallDetector on a downscaled copy of the bitmap.
      * STRATEGY_KEEP_ONLY_LATEST ensures we never pile up frames on the background thread.
-     * Detection itself runs on backgroundExecutor (never the main thread).
      */
     private fun detectFrame(imageProxy: ImageProxy) {
         // Drop frames immediately if scanning loop is not active
@@ -343,6 +351,47 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
             imageProxy.close()
             return
         }
+
+        // Step 6: Run wall detector on the raw frame BEFORE closing the proxy.
+        // We need a Bitmap copy since imageProxy.planes[0].buffer is consumed by detectLivestreamFrame.
+        val wallBitmap: Bitmap? = try {
+            val bmp = Bitmap.createBitmap(
+                imageProxy.width, imageProxy.height, Bitmap.Config.ARGB_8888
+            )
+            val buffer = imageProxy.planes[0].buffer
+            buffer.rewind()
+            bmp.copyPixelsFromBuffer(buffer)
+            buffer.rewind() // rewind so detectLivestreamFrame can also read it
+            bmp
+        } catch (e: Exception) {
+            Log.w(TAG, "Wall bitmap copy failed: ${e.message}")
+            null
+        }
+
+        // Wall analysis runs on background thread (heavy variance computation)
+        if (wallBitmap != null) {
+            val isWall = wallDetector.analyze(wallBitmap)
+            lastWallVariance = wallDetector.lastVariance
+            wallBitmap.recycle()
+            if (isWall) {
+                val lang = (activity as? MainActivity)?.activeLanguage
+                    ?: Messages.Language.ENGLISH
+                val wallMsg = Messages.wallAhead(lang)
+                Log.i(TAG, "WALL AHEAD detected (variance=${wallDetector.lastVariance}): $wallMsg")
+                activity?.runOnUiThread {
+                    if (_fragmentCameraBinding != null && isScanningActive) {
+                        fragmentCameraBinding.tvDetectionFeedback.text = wallMsg
+                        if (isDebugOverlayVisible) {
+                            fragmentCameraBinding.tvDebugLatency.text =
+                                "wall var=${wallDetector.lastVariance.toLong()}"
+                        }
+                    }
+                }
+                audioHapticManager.speak(wallMsg, isUrgent = false)
+                audioHapticManager.vibrateHazard()
+            }
+        }
+
         Log.v(TAG, "Forwarding frame to detector at ${SystemClock.uptimeMillis()}ms")
         objectDetectorHelper.detectLivestreamFrame(imageProxy)
     }

@@ -267,7 +267,7 @@ class AudioHapticManager(private val context: Context) : TextToSpeech.OnInitList
         lastSpokenCue = text
         lastSpokenTimestamp = currentTime
 
-        val queueMode = if (isUrgent) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_FLUSH
+        val queueMode = if (isUrgent) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
 
         tts?.speak(text, queueMode, null, utteranceId)
     }
