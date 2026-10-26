@@ -42,6 +42,20 @@ class MainActivity : AppCompatActivity() {
     lateinit var audioHapticManager: AudioHapticManager
         private set
 
+    /** Active language for TTS messages. Toggle via the debug screen (Step 8). */
+    var activeLanguage: Messages.Language = Messages.Language.ENGLISH
+        private set
+
+    /** Cycle through English → Hindi → Kannada → English */
+    fun cycleLanguage() {
+        activeLanguage = when (activeLanguage) {
+            Messages.Language.ENGLISH  -> Messages.Language.HINDI
+            Messages.Language.HINDI    -> Messages.Language.KANNADA
+            Messages.Language.KANNADA  -> Messages.Language.ENGLISH
+        }
+        Log.i(TAG, "Language switched to $activeLanguage")
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 

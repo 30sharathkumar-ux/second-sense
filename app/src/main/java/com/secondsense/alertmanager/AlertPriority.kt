@@ -1,10 +1,13 @@
 package com.secondsense.alertmanager
 
 /**
- * AlertPriority — Pair B Rule #4
+ * AlertPriority — Step 2: Direction Priority (revised priority tiers)
  *
- * Defines alert priority tiers so that life-critical detections (person, vehicle,
- * stray animal) are always processed before lower-priority obstacles.
+ * Global alert priority order:
+ *   1. DANGER      — fast-approaching / sudden large object
+ *   2. HAZARD      — wall, pothole, steps, door (environment hazard)
+ *   3. PERSON_VEH  — person / vehicle / animal
+ *   4. OTHER       — everything else
  *
  * Lower ordinal = higher priority (used for sorting).
  */
@@ -14,65 +17,68 @@ enum class AlertPriority(
     val speechPrefix: String
 ) {
     /**
-     * CRITICAL — Immediate safety risk.
-     * Persons, vehicles, stray animals must be announced first.
+     * DANGER (1) — Fast-approaching or suddenly appearing large object.
+     * Bypasses normal cooldown; confirmed in only 2 consecutive frames.
      */
-    CRITICAL(
+    DANGER(
         level = 0,
-        label = "Critical",
-        speechPrefix = "Caution!"
-    ),
-
-    /**
-     * HIGH — Notable hazard but not immediately life-threatening.
-     * E.g., open pits, stairs, falling objects.
-     */
-    HIGH(
-        level = 1,
-        label = "High",
+        label = "Danger",
         speechPrefix = "Warning!"
     ),
 
     /**
-     * MEDIUM — General obstacle needing attention.
-     * E.g., furniture, parked bikes, walls.
+     * HAZARD (2) — Environmental hazards: wall, pothole, stairs, door.
      */
-    MEDIUM(
-        level = 2,
-        label = "Medium",
-        speechPrefix = "Heads up!"
+    HAZARD(
+        level = 1,
+        label = "Hazard",
+        speechPrefix = "Caution!"
     ),
 
     /**
-     * LOW — Informational proximity hint, non-blocking.
+     * PERSON_VEH (3) — Person, vehicle, stray animal.
      */
-    LOW(
+    PERSON_VEH(
+        level = 2,
+        label = "Person/Vehicle",
+        speechPrefix = "Watch out!"
+    ),
+
+    /**
+     * OTHER (4) — General obstacles (furniture, bags, etc.)
+     */
+    OTHER(
         level = 3,
-        label = "Low",
+        label = "Other",
         speechPrefix = "Notice:"
     );
 
+    // Keep CRITICAL / HIGH / MEDIUM / LOW as aliases for legacy code compatibility
     companion object {
+        @JvmStatic val CRITICAL = PERSON_VEH
+        @JvmStatic val HIGH     = HAZARD
+        @JvmStatic val MEDIUM   = OTHER
+        @JvmStatic val LOW      = OTHER
+
         /**
          * Returns the AlertPriority for a given object label.
          *
-         * Rule #4: person, vehicle (car/truck/bike/motorcycle/bus), and stray
-         * animals (dog/cat/cow/horse/sheep) map to CRITICAL priority.
+         * Note: DANGER is NOT assigned here — it is assigned dynamically by
+         * ApproachTracker when growth rate exceeds the threshold (Step 3).
          *
          * @param label The object detection class label (case-insensitive).
          */
         fun forObject(label: String): AlertPriority {
             val normalized = label.trim().lowercase()
             return when {
-                normalized in CRITICAL_OBJECTS -> CRITICAL
-                normalized in HIGH_HAZARD_OBJECTS -> HIGH
-                normalized in MEDIUM_OBSTACLES -> MEDIUM
-                else -> LOW
+                normalized in PERSON_VEH_OBJECTS -> PERSON_VEH
+                normalized in HAZARD_OBJECTS     -> HAZARD
+                else                             -> OTHER
             }
         }
 
-        /** Rule #4 — Person, vehicle and stray animal class names (CRITICAL). */
-        val CRITICAL_OBJECTS: Set<String> = setOf(
+        /** Person, vehicle and stray animal class names (PERSON_VEH tier). */
+        val PERSON_VEH_OBJECTS: Set<String> = setOf(
             // People
             "person", "human", "pedestrian", "child",
             // Vehicles
@@ -83,16 +89,21 @@ enum class AlertPriority(
             "elephant", "deer", "bear", "animal", "stray"
         )
 
-        /** Dangerous environment hazards. */
-        val HIGH_HAZARD_OBJECTS: Set<String> = setOf(
-            "stairs", "staircase", "step", "pit", "hole", "fire",
-            "construction", "barrier", "road", "traffic"
+        /**
+         * Environmental hazards (HAZARD tier).
+         * Includes custom-model labels: "pothole", "stairs", "door".
+         */
+        val HAZARD_OBJECTS: Set<String> = setOf(
+            "stairs", "staircase", "step", "steps", "pit", "hole", "fire",
+            "construction", "barrier", "road", "traffic",
+            // Custom model labels (Step 7)
+            "pothole", "door"
         )
 
-        /** Common obstacle class names. */
-        val MEDIUM_OBSTACLES: Set<String> = setOf(
+        /** Common obstacle class names (OTHER tier). */
+        val OTHER_OBJECTS: Set<String> = setOf(
             "chair", "table", "wall", "bench", "box", "pole", "pillar",
-            "bin", "trash", "door", "gate", "fence", "lamp", "tree",
+            "bin", "trash", "gate", "fence", "lamp", "tree",
             "bag", "luggage", "suitcase"
         )
     }

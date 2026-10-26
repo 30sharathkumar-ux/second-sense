@@ -194,14 +194,14 @@ class AlertTestActivity : AppCompatActivity(), AlertManager.AlertEventListener {
         binding.tvPriorityBadge.text = priority.label
         binding.tvPriorityBadge.setBackgroundColor(
             when (priority) {
-                AlertPriority.CRITICAL -> Color.parseColor("#C62828")
-                AlertPriority.HIGH     -> Color.parseColor("#E65100")
-                AlertPriority.MEDIUM   -> Color.parseColor("#F57F17")
-                AlertPriority.LOW      -> getColor(R.color.status_badge_bg)
+                AlertPriority.DANGER     -> Color.parseColor("#B71C1C")
+                AlertPriority.HAZARD     -> Color.parseColor("#C62828")
+                AlertPriority.PERSON_VEH -> Color.parseColor("#E65100")
+                AlertPriority.OTHER      -> getColor(R.color.status_badge_bg)
             }
         )
         binding.tvPriorityBadge.setTextColor(
-            if (priority == AlertPriority.LOW) getColor(R.color.status_badge_text)
+            if (priority == AlertPriority.OTHER) getColor(R.color.status_badge_text)
             else Color.WHITE
         )
     }
@@ -267,10 +267,10 @@ class AlertTestActivity : AppCompatActivity(), AlertManager.AlertEventListener {
                 )
                 triggerPulseAnimation(
                     when (obj.priority) {
-                        AlertPriority.CRITICAL -> Color.parseColor("#C62828")
-                        AlertPriority.HIGH     -> Color.parseColor("#E65100")
-                        AlertPriority.MEDIUM   -> Color.parseColor("#F57F17")
-                        AlertPriority.LOW      -> getColor(R.color.primary)
+                        AlertPriority.DANGER     -> Color.parseColor("#B71C1C")
+                        AlertPriority.HAZARD     -> Color.parseColor("#C62828")
+                        AlertPriority.PERSON_VEH -> Color.parseColor("#E65100")
+                        AlertPriority.OTHER      -> getColor(R.color.primary)
                     }
                 )
             } else {

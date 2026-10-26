@@ -41,6 +41,7 @@ import com.google.mediapipe.examples.objectdetection.AudioHapticManager
 import com.google.mediapipe.examples.objectdetection.DistanceDirectionCalculator
 import com.google.mediapipe.examples.objectdetection.MainActivity
 import com.google.mediapipe.examples.objectdetection.MainViewModel
+import com.google.mediapipe.examples.objectdetection.Messages
 import com.google.mediapipe.examples.objectdetection.ObjectDetectorHelper
 import com.google.mediapipe.examples.objectdetection.R
 import com.google.mediapipe.examples.objectdetection.SpatialLogic
@@ -387,20 +388,29 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
                     resultBundle.inputImageHeight.toFloat()
                 }
 
-                // 1. Loop Processing: For every frame where objects are detected
-                // Sort detections by area descending so closest / largest hazards are evaluated first
-                val sortedDetections = detections.sortedByDescending { det ->
-                    val b = det.boundingBox()
-                    if (b != null) (b.width() * b.height()) else 0f
-                }
+                // Step 2: Sort by direction priority (center ahead first) then area descending.
+                // Center-third detections get a priority bonus: score them higher.
+                val sortedDetections = detections.sortedWith(
+                    compareBy<com.google.mediapipe.tasks.components.containers.Detection> { det ->
+                        val b = det.boundingBox() ?: return@compareBy 999
+                        val centerXNorm = ((b.left + b.right) / 2f) / frameWidth
+                        // Center third (1/3..2/3) → priority 0, sides → priority 1
+                        if (centerXNorm in (1f / 3f)..(2f / 3f)) 0 else 1
+                    }.thenByDescending { det ->
+                        val b = det.boundingBox()
+                        if (b != null) (b.width() * b.height()) else 0f
+                    }
+                )
 
                 var alertDispatched = false
+                val lang = (activity as? MainActivity)?.activeLanguage
+                    ?: Messages.Language.ENGLISH
 
                 for (detection in sortedDetections) {
                     val box = detection.boundingBox() ?: continue
                     val label = detection.categories().firstOrNull()?.categoryName() ?: "obstacle"
 
-                    // Pass coordinates to DistanceDirectionCalculator.calculate(...)
+                    // Calculate direction and distance
                     val result = DistanceDirectionCalculator.calculate(
                         left = box.left,
                         top = box.top,
@@ -411,15 +421,20 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
                         label = label
                     )
 
-                    // If shouldAlert is true, format clear text message: e.g., "$label $distanceState, $direction"
                     if (result.shouldAlert) {
-                        val message = "${result.label} ${result.distanceState}, ${result.direction}"
-                        Log.i(TAG, "Detection Pipeline Alert: $message")
+                        // Build the spoken message using Messages.kt (direction-aware, multilingual)
+                        val message = Messages.alert(
+                            lang = lang,
+                            label = label,
+                            direction = result.direction,
+                            distanceState = result.distanceState
+                        )
+                        Log.i(TAG, "Detection Pipeline Alert: $message (dir=${result.direction})")
 
-                        // Update feedback banner on UI for accessibility & testing
+                        // Update feedback banner on UI for accessibility & debugging
                         fragmentCameraBinding.tvDetectionFeedback.text = message
 
-                        // 3. Rate Limiting / Anti-Spam: 3-second cooldown timer between repeated voice alerts
+                        // Rate-limiting: 3-second cooldown between repeated voice alerts
                         val currentTime = SystemClock.uptimeMillis()
                         val isRepeatedAlert = message.equals(lastSpokenAlertMessage, ignoreCase = true)
                         val cooldownPassed = (currentTime - lastVoiceAlertTimestamp) >= VOICE_ALERT_COOLDOWN_MS
@@ -428,23 +443,19 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
                             lastVoiceAlertTimestamp = currentTime
                             lastSpokenAlertMessage = message
 
-                            // 2. Audio & Haptics Dispatch:
-                            // Call audioHapticManager.speak(message)
                             audioHapticManager.speak(message)
 
-                            // If distanceState == "very close" -> heavy pulsing pattern (isClose = true)
-                            // If distanceState == "near" -> light tap (isClose = false)
                             if (result.distanceState == DistanceDirectionCalculator.DISTANCE_VERY_CLOSE) {
                                 audioHapticManager.vibrate(isClose = true)
                             } else if (result.distanceState == DistanceDirectionCalculator.DISTANCE_NEAR) {
                                 audioHapticManager.vibrate(isClose = false)
                             }
                         } else {
-                            Log.d(TAG, "Skipping repeated voice alert within 3s cooldown: $message")
+                            Log.d(TAG, "Skipping repeated voice alert within cooldown: $message")
                         }
 
                         alertDispatched = true
-                        break // Dispatched the top-priority alert for this frame
+                        break // One alert per frame — highest priority wins
                     }
                 }
 
