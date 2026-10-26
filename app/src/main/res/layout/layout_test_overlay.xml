@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Step 8: TEST MODE overlay
+    Hidden test panel revealed by 5-taps on the status badge in CameraFragment.
+    Contains simulation buttons for DANGER / BATTERY / WALL AHEAD / LANGUAGE.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/layout_test_overlay"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#CC000000"
+    android:visibility="gone">
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="#1A1A2E"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginBottom="20dp"
+            android:text="TEST MODE"
+            android:textColor="#FFFFFF"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <!-- Simulate DANGER -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_test_danger"
+            android:layout_width="240dp"
+            android:layout_height="56dp"
+            android:layout_marginBottom="12dp"
+            android:text="Simulate DANGER"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            app:backgroundTint="#C62828" />
+
+        <!-- Simulate BATTERY 10% -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_test_battery"
+            android:layout_width="240dp"
+            android:layout_height="56dp"
+            android:layout_marginBottom="12dp"
+            android:text="Simulate Battery 10%"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            app:backgroundTint="#E65100" />
+
+        <!-- Simulate WALL AHEAD -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_test_wall"
+            android:layout_width="240dp"
+            android:layout_height="56dp"
+            android:layout_marginBottom="12dp"
+            android:text="Simulate Wall Ahead"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            app:backgroundTint="#37474F" />
+
+        <!-- Cycle Language -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_test_language"
+            android:layout_width="240dp"
+            android:layout_height="56dp"
+            android:layout_marginBottom="20dp"
+            android:text="Cycle Language EN-HI-KN"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            app:backgroundTint="#1565C0" />
+
+        <!-- Close -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_test_close"
+            android:layout_width="240dp"
+            android:layout_height="48dp"
+            android:text="Close"
+            android:textColor="#CCCCCC"
+            android:textSize="14sp"
+            app:backgroundTint="#333333" />
+
+    </LinearLayout>
+
+</FrameLayout>

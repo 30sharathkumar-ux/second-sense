@@ -87,6 +87,12 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
     /** Last wall-alert timestamp — used by the debug overlay to show variance. */
     @Volatile private var lastWallVariance = Double.MAX_VALUE
 
+    /** Step 8: Test mode — count taps on the status badge to reveal the test overlay. */
+    private var testTapCount = 0
+    private var testTapLastMs = 0L
+    private val TEST_TAP_WINDOW_MS = 2000L
+    private val TEST_TAP_REQUIRED = 5
+
     /** Scanning active flag — controlled by the large UI toggle button */
     @Volatile
     private var isScanningActive: Boolean = false
@@ -207,6 +213,21 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
                 if (isDebugOverlayVisible) View.VISIBLE else View.GONE
             true
         }
+
+        // Step 8: 5 rapid taps on the status badge reveal the test mode panel
+        fragmentCameraBinding.layoutStatus.setOnClickListener {
+            val now = System.currentTimeMillis()
+            if (now - testTapLastMs > TEST_TAP_WINDOW_MS) testTapCount = 0
+            testTapLastMs = now
+            testTapCount++
+            if (testTapCount >= TEST_TAP_REQUIRED) {
+                testTapCount = 0
+                showTestMode()
+            }
+        }
+
+        // Wire test mode overlay buttons
+        setupTestMode()
     }
 
     /**
@@ -271,6 +292,81 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
 
             binding.tvDetectionFeedback.text = getString(R.string.cue_idle)
         }
+    }
+
+    // ── Step 8: Test Mode ─────────────────────────────────────────────────────
+
+    private fun showTestMode() {
+        requireView().findViewById<android.widget.FrameLayout>(R.id.layout_test_overlay)?.visibility = View.VISIBLE
+        Log.i(TAG, "Test mode opened")
+    }
+
+    private fun hideTestMode() {
+        requireView().findViewById<android.widget.FrameLayout>(R.id.layout_test_overlay)?.visibility = View.GONE
+    }
+
+    /**
+     * Wires the 4 simulation buttons in the test overlay:
+     *   1. DANGER      — speaks a danger alert and triggers the torch+vibration.
+     *   2. BATTERY 10% — speaks the 10% battery alert.
+     *   3. WALL AHEAD  — speaks the wall-ahead cue.
+     *   4. LANGUAGE    — cycles EN → HI → KN → EN and announces the new language.
+     *   5. CLOSE       — hides the overlay.
+     */
+    private fun setupTestMode() {
+        // Use requireView().findViewById to access the included layout's children
+        val btnDanger   = requireView().findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_test_danger)
+        val btnBattery  = requireView().findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_test_battery)
+        val btnWall     = requireView().findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_test_wall)
+        val btnLanguage = requireView().findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_test_language)
+        val btnClose    = requireView().findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_test_close)
+
+        btnDanger?.setOnClickListener {
+            val lang = (activity as? MainActivity)?.activeLanguage ?: Messages.Language.ENGLISH
+            val msg  = Messages.dangerAlert(lang, "person", "straight ahead")
+            fragmentCameraBinding.tvDetectionFeedback.text = msg
+            audioHapticManager.speak(msg, isUrgent = true)
+            audioHapticManager.vibrateHazard()
+            (activity as? MainActivity)?.torchController?.triggerDangerTorch()
+            Log.i(TAG, "TEST: DANGER simulated")
+            hideTestMode()
+        }
+
+        btnBattery?.setOnClickListener {
+            val lang = (activity as? MainActivity)?.activeLanguage ?: Messages.Language.ENGLISH
+            val msg  = Messages.battery10(lang)
+            fragmentCameraBinding.tvDetectionFeedback.text = msg
+            audioHapticManager.speak(msg, isUrgent = false)
+            audioHapticManager.vibrateHazard()
+            Log.i(TAG, "TEST: BATTERY 10% simulated")
+            hideTestMode()
+        }
+
+        btnWall?.setOnClickListener {
+            val lang = (activity as? MainActivity)?.activeLanguage ?: Messages.Language.ENGLISH
+            val msg  = Messages.wallAhead(lang)
+            fragmentCameraBinding.tvDetectionFeedback.text = msg
+            audioHapticManager.speak(msg, isUrgent = false)
+            audioHapticManager.vibrateHazard()
+            Log.i(TAG, "TEST: WALL AHEAD simulated")
+            hideTestMode()
+        }
+
+        btnLanguage?.setOnClickListener {
+            val mainActivity = activity as? MainActivity
+            mainActivity?.cycleLanguage()
+            val lang = mainActivity?.activeLanguage ?: Messages.Language.ENGLISH
+            val announcement = when (lang) {
+                Messages.Language.ENGLISH -> "Language: English"
+                Messages.Language.HINDI   -> "Bhaasha: Hindi"
+                Messages.Language.KANNADA -> "Bhaashe: Kannada"
+            }
+            audioHapticManager.speak(announcement, isUrgent = true)
+            fragmentCameraBinding.tvDetectionFeedback.text = announcement
+            Log.i(TAG, "TEST: Language cycled to $lang")
+        }
+
+        btnClose?.setOnClickListener { hideTestMode() }
     }
 
     // Initialize CameraX, and prepare to bind the camera use cases
