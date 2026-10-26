@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">Second Sense</string>
+    <string name="app_subtitle">Pair B — Alert Manager Module</string>
+    <string name="tts_section_title">Text-to-Speech Output</string>
+    <string name="tts_section_desc">Calls AlertManager.speak(text) using Android TextToSpeech engine.</string>
+    <string name="speak_button">Speak</string>
+    <string name="default_speech_text">Warning: Obstacle detected within 50 centimeters.</string>
+    <string name="vibration_section_title">Haptic Vibration Output</string>
+    <string name="vibration_section_desc">Calls AlertManager.vibrate(strength) using VibrationEffect.</string>
+    <string name="vibrate_button">Vibrate</string>
+    <string name="strength_label">Vibration Strength: %1$d / 255</string>
+    <string name="status_ready">Status: AlertManager initialized and ready.</string>
+    <string name="console_title">Activity &amp; Diagnostics Log</string>
+</resources>
