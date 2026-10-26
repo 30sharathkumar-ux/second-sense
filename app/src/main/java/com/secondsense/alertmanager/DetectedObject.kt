@@ -1,21 +1,31 @@
 package com.secondsense.alertmanager
 
 /**
- * DetectedObject — Pair B Data Model
- *
- * Represents a single detection event from the camera/sensor pipeline.
+ * DetectedObject — Step 3: Added centerX, areaRatio, isDanger fields
  *
  * @param label       Class label from the object detection model (e.g. "person", "car").
  * @param distanceCm  Estimated distance to the object in centimetres (0 means unknown).
  * @param confidence  Detection confidence score from the model [0.0 – 1.0].
+ * @param centerX     Normalised horizontal centre of the bounding box [0..1]. Used by ApproachTracker.
+ * @param areaRatio   Bounding box area / screen area [0..1]. Used by ApproachTracker.
+ * @param isDanger    True when ApproachTracker classifies this as DANGER (fast path).
+ * @param direction   Direction string from DistanceDirectionCalculator (e.g. "straight ahead").
  */
 data class DetectedObject(
     val label: String,
     val distanceCm: Float,
-    val confidence: Float = 1.0f
+    val confidence: Float = 1.0f,
+    val centerX: Float = 0.5f,
+    val areaRatio: Float = 0f,
+    val isDanger: Boolean = false,
+    val direction: String = "straight ahead"
 ) {
-    /** Derived priority using Rule #4 classification. */
-    val priority: AlertPriority get() = AlertPriority.forObject(label)
+    /**
+     * Derived priority using the new 4-tier classification.
+     * DANGER is set from the isDanger flag; otherwise falls through to forObject().
+     */
+    val priority: AlertPriority
+        get() = if (isDanger) AlertPriority.DANGER else AlertPriority.forObject(label)
 
     /**
      * Returns a natural-language distance description suitable for TTS.
@@ -30,19 +40,14 @@ data class DetectedObject(
 
     /**
      * Builds the full spoken alert sentence.
-     * Example: "Caution! person detected, very close, 30 centimetres."
+     * Example: "Warning! person approaching ahead."
      */
     fun toAlertText(): String =
-        "${priority.speechPrefix} ${label.lowercase()} detected, ${distanceDescription()}."
+        "${priority.speechPrefix} ${label.lowercase()} ${distanceDescription()}."
 
     companion object {
-        /** Distance (cm) below which we consider an object dangerously close. */
         const val CRITICAL_DISTANCE_CM = 100f
-
-        /** Distance (cm) for medium-range warnings. */
-        const val MEDIUM_DISTANCE_CM = 250f
-
-        /** Distance (cm) for long-range awareness. */
-        const val FAR_DISTANCE_CM = 500f
+        const val MEDIUM_DISTANCE_CM   = 250f
+        const val FAR_DISTANCE_CM      = 500f
     }
 }

@@ -37,6 +37,7 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.navigation.Navigation
+import com.google.mediapipe.examples.objectdetection.ApproachTracker
 import com.google.mediapipe.examples.objectdetection.AudioHapticManager
 import com.google.mediapipe.examples.objectdetection.DistanceDirectionCalculator
 import com.google.mediapipe.examples.objectdetection.MainActivity
@@ -75,6 +76,9 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
     /** Audio & Haptics Manager for blind user accessibility */
     private lateinit var audioHapticManager: AudioHapticManager
 
+    /** Step 3: Approach tracker — detects fast-approaching / suddenly appearing objects */
+    private val approachTracker = ApproachTracker()
+
     /** Scanning active flag — controlled by the large UI toggle button */
     @Volatile
     private var isScanningActive: Boolean = false
@@ -82,6 +86,8 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
     /** Cooldown tracking for repeated voice alerts */
     private var lastVoiceAlertTimestamp = 0L
     private var lastSpokenAlertMessage = ""
+    /** Timestamp of the last DANGER alert fired (for its own cooldown tracking). */
+    private var lastDangerAlertTimestamp = 0L
 
     /** Debug mode: show ms/frame overlay. Toggle by long-pressing the status badge. */
     @Volatile
@@ -111,6 +117,9 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
 
     override fun onPause() {
         super.onPause()
+
+        // Step 4: Always turn off torch when fragment pauses
+        (activity as? MainActivity)?.torchController?.forceOff()
 
         // save ObjectDetector settings
         if (this::objectDetectorHelper.isInitialized) {
@@ -315,6 +324,9 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
             )
 
             preview?.setSurfaceProvider(fragmentCameraBinding.viewFinder.surfaceProvider)
+
+            // Step 4: Inject Camera into TorchController so it can call cameraControl.enableTorch()
+            (activity as? MainActivity)?.torchController?.attachCamera(camera)
         } catch (exc: Exception) {
             Log.e(TAG, "Use case binding failed", exc)
         }
@@ -388,13 +400,12 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
                     resultBundle.inputImageHeight.toFloat()
                 }
 
-                // Step 2: Sort by direction priority (center ahead first) then area descending.
-                // Center-third detections get a priority bonus: score them higher.
+                // Step 3: Evaluate each detection for approaching-object danger.
+                // Sort by direction priority (center ahead first) then area descending.
                 val sortedDetections = detections.sortedWith(
                     compareBy<com.google.mediapipe.tasks.components.containers.Detection> { det ->
                         val b = det.boundingBox() ?: return@compareBy 999
                         val centerXNorm = ((b.left + b.right) / 2f) / frameWidth
-                        // Center third (1/3..2/3) → priority 0, sides → priority 1
                         if (centerXNorm in (1f / 3f)..(2f / 3f)) 0 else 1
                     }.thenByDescending { det ->
                         val b = det.boundingBox()
@@ -421,42 +432,71 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
                         label = label
                     )
 
-                    if (result.shouldAlert) {
-                        // Build the spoken message using Messages.kt (direction-aware, multilingual)
-                        val message = Messages.alert(
-                            lang = lang,
-                            label = label,
-                            direction = result.direction,
-                            distanceState = result.distanceState
-                        )
-                        Log.i(TAG, "Detection Pipeline Alert: $message (dir=${result.direction})")
+                    if (!result.shouldAlert) continue
 
-                        // Update feedback banner on UI for accessibility & debugging
-                        fragmentCameraBinding.tvDetectionFeedback.text = message
+                    // Step 3: Compute approach metrics for this detection
+                    val centerXNorm = ((box.left + box.right) / 2f) / frameWidth
+                    val areaRatio = DistanceDirectionCalculator.calculateAreaRatio(
+                        box.left, box.top, box.right, box.bottom, frameWidth, frameHeight
+                    )
+                    val isDanger = approachTracker.evaluate(
+                        label        = label,
+                        centerXNorm  = centerXNorm,
+                        areaRatio    = areaRatio,
+                        nowMs        = System.currentTimeMillis()
+                    )
 
-                        // Rate-limiting: 3-second cooldown between repeated voice alerts
-                        val currentTime = SystemClock.uptimeMillis()
-                        val isRepeatedAlert = message.equals(lastSpokenAlertMessage, ignoreCase = true)
-                        val cooldownPassed = (currentTime - lastVoiceAlertTimestamp) >= VOICE_ALERT_COOLDOWN_MS
+                    val currentTime = SystemClock.uptimeMillis()
 
-                        if (!isRepeatedAlert || cooldownPassed) {
-                            lastVoiceAlertTimestamp = currentTime
-                            lastSpokenAlertMessage = message
-
-                            audioHapticManager.speak(message)
-
-                            if (result.distanceState == DistanceDirectionCalculator.DISTANCE_VERY_CLOSE) {
-                                audioHapticManager.vibrate(isClose = true)
-                            } else if (result.distanceState == DistanceDirectionCalculator.DISTANCE_NEAR) {
-                                audioHapticManager.vibrate(isClose = false)
-                            }
-                        } else {
-                            Log.d(TAG, "Skipping repeated voice alert within cooldown: $message")
+                    if (isDanger) {
+                        // DANGER fast path: 1.5s cooldown, QUEUE_FLUSH, strongest vibration
+                        val dangerCooldownPassed =
+                            (currentTime - lastDangerAlertTimestamp) >= 1_500L
+                        if (dangerCooldownPassed) {
+                            lastDangerAlertTimestamp = currentTime
+                            val dangerMsg = Messages.dangerAlert(lang, label, result.direction)
+                            Log.i(TAG, "DANGER ALERT: $dangerMsg")
+                            fragmentCameraBinding.tvDetectionFeedback.text = dangerMsg
+                            // QUEUE_FLUSH interrupts any lower-priority speech
+                            audioHapticManager.speak(dangerMsg, isUrgent = true)
+                            audioHapticManager.vibrateHazard()
+                            // Torch on — handled in Step 4 via TorchController
+                            (activity as? MainActivity)?.torchController?.triggerDangerTorch()
                         }
-
                         alertDispatched = true
-                        break // One alert per frame — highest priority wins
+                        break
                     }
+
+                    // Normal alert path
+                    val message = Messages.alert(
+                        lang = lang,
+                        label = label,
+                        direction = result.direction,
+                        distanceState = result.distanceState
+                    )
+                    Log.i(TAG, "Detection Alert: $message (dir=${result.direction})")
+                    fragmentCameraBinding.tvDetectionFeedback.text = message
+
+                    val isRepeatedAlert = message.equals(lastSpokenAlertMessage, ignoreCase = true)
+                    val cooldownPassed = (currentTime - lastVoiceAlertTimestamp) >= VOICE_ALERT_COOLDOWN_MS
+
+                    if (!isRepeatedAlert || cooldownPassed) {
+                        lastVoiceAlertTimestamp = currentTime
+                        lastSpokenAlertMessage = message
+
+                        audioHapticManager.speak(message)
+
+                        if (result.distanceState == DistanceDirectionCalculator.DISTANCE_VERY_CLOSE) {
+                            audioHapticManager.vibrate(isClose = true)
+                        } else if (result.distanceState == DistanceDirectionCalculator.DISTANCE_NEAR) {
+                            audioHapticManager.vibrate(isClose = false)
+                        }
+                    } else {
+                        Log.d(TAG, "Skipping repeated voice alert within cooldown: $message")
+                    }
+
+                    alertDispatched = true
+                    break // One alert per frame — highest priority wins
                 }
 
                 if (!alertDispatched) {

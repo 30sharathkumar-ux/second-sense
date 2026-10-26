@@ -42,6 +42,13 @@ class MainActivity : AppCompatActivity() {
     lateinit var audioHapticManager: AudioHapticManager
         private set
 
+    /**
+     * Step 4: Torch controller — uses CameraX cameraControl so it works
+     * while CameraX owns the camera. CameraFragment injects the Camera
+     * reference after bindToLifecycle.
+     */
+    val torchController = TorchController()
+
     /** Active language for TTS messages. Toggle via the debug screen (Step 8). */
     var activeLanguage: Messages.Language = Messages.Language.ENGLISH
         private set
@@ -76,6 +83,12 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         // Re-apply immersive mode when returning from another app
         setupImmersiveMode()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Always extinguish torch when app goes to background
+        torchController.forceOff()
     }
 
     private fun setupImmersiveMode() {
@@ -128,6 +141,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        torchController.forceOff()
         if (this::audioHapticManager.isInitialized) {
             audioHapticManager.shutdown()
         }
