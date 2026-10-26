@@ -46,8 +46,9 @@ import com.google.mediapipe.examples.objectdetection.MainViewModel
 import com.google.mediapipe.examples.objectdetection.Messages
 import com.google.mediapipe.examples.objectdetection.ObjectDetectorHelper
 import com.google.mediapipe.examples.objectdetection.R
+import com.google.mediapipe.examples.objectdetection.DepthEstimator
 import com.google.mediapipe.examples.objectdetection.LabelMapper
-import com.google.mediapipe.examples.objectdetection.SpatialLogic
+import com.google.mediapipe.examples.objectdetection.StairsDetector
 import com.google.mediapipe.examples.objectdetection.WallDetector
 import com.google.mediapipe.examples.objectdetection.databinding.FragmentCameraBinding
 import com.google.mediapipe.tasks.vision.core.RunningMode
@@ -84,6 +85,14 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
 
     /** Step 6: Wall/obstacle ahead heuristic (variance-based) */
     private val wallDetector = WallDetector()
+
+    /** Stairs-v4 Step 1: Stairs-up detector (horizontal edge repetition) */
+    private val stairsDetector = StairsDetector()
+
+    /** Step 2: MiDaS depth estimator — class-independent obstacle detection. */
+    private lateinit var depthEstimator: DepthEstimator
+    /** Last depth alert reason string for debug overlay. */
+    @Volatile var lastAlertReason: String = ""
 
     /** Last wall-alert timestamp — used by the debug overlay to show variance. */
     @Volatile private var lastWallVariance = Double.MAX_VALUE
@@ -151,6 +160,8 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
         if (activity !is MainActivity && this::audioHapticManager.isInitialized) {
             audioHapticManager.shutdown()
         }
+        // Step 2: release depth estimator resources
+        if (this::depthEstimator.isInitialized) depthEstimator.close()
         _fragmentCameraBinding = null
         super.onDestroyView()
 
@@ -181,6 +192,9 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
         audioHapticManager = (activity as? MainActivity)?.audioHapticManager
             ?: AudioHapticManager(requireContext())
 
+        // Step 2: Initialize depth estimator on the background thread (model load can be slow)
+        depthEstimator = DepthEstimator(requireContext())
+
         // Initialize background executor
         backgroundExecutor = Executors.newSingleThreadExecutor()
 
@@ -196,6 +210,9 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
                     objectDetectorListener = this,
                     runningMode = RunningMode.LIVE_STREAM
                 )
+
+            // Step 2: init depth estimator on background thread (GPU delegate must be on same thread)
+            depthEstimator.init()
 
             fragmentCameraBinding.viewFinder.post {
                 setUpCamera()
@@ -469,22 +486,102 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
         if (wallBitmap != null) {
             val isWall = wallDetector.analyze(wallBitmap)
             lastWallVariance = wallDetector.lastVariance
+
+            // Step 2: Run MiDaS depth estimator on the same frame copy (every 3rd frame internally)
+            val depthAlert = if (this::depthEstimator.isInitialized) {
+                depthEstimator.analyzeFrame(wallBitmap)
+            } else null
+
             wallBitmap.recycle()
+
             if (isWall) {
-                val lang = (activity as? MainActivity)?.activeLanguage
-                    ?: Messages.Language.ENGLISH
+                val lang    = (activity as? MainActivity)?.activeLanguage ?: Messages.Language.ENGLISH
                 val wallMsg = Messages.wallAhead(lang)
-                Log.i(TAG, "WALL AHEAD detected (variance=${wallDetector.lastVariance}): $wallMsg")
+                lastAlertReason = "LUMINANCE_WALL"
+                Log.i(TAG, "WALL AHEAD (variance=${wallDetector.lastVariance}): $wallMsg")
                 activity?.runOnUiThread {
                     if (_fragmentCameraBinding != null && isScanningActive) {
                         fragmentCameraBinding.tvDetectionFeedback.text = wallMsg
-                        if (isDebugOverlayVisible) {
-                            fragmentCameraBinding.tvDebugLatency.text =
-                                "wall var=${wallDetector.lastVariance.toLong()}"
-                        }
                     }
                 }
                 audioHapticManager.speak(wallMsg, isUrgent = false)
+                audioHapticManager.vibrateHazard()
+            }
+
+            // Step 2: Handle depth alert (only if it provides higher info than luminance wall)
+            if (depthAlert != null && depthAlert.type != DepthEstimator.AlertType.NONE && !isWall) {
+                val lang = (activity as? MainActivity)?.activeLanguage ?: Messages.Language.ENGLISH
+                val grid = depthEstimator.lastGrid
+                val guidanceStr = when (depthAlert.guidance) {
+                    "left"  -> Messages.moveLeft(lang)
+                    "right" -> Messages.moveRight(lang)
+                    "stop"  -> Messages.stop(lang)
+                    else    -> ""
+                }
+                val msg = when (depthAlert.type) {
+                    DepthEstimator.AlertType.WALL    -> Messages.wallAhead(lang)
+                    DepthEstimator.AlertType.DROP    -> Messages.dropAhead(lang)
+                    DepthEstimator.AlertType.STEPS_UP -> Messages.stepsUp(lang)
+                    else                              -> Messages.depthObstacle(lang, guidanceStr)
+                }
+                lastAlertReason = "DEPTH_${depthAlert.type}"
+                Log.i(TAG, "DEPTH ALERT ${depthAlert.type}: $msg (guidance=${depthAlert.guidance})")
+                activity?.runOnUiThread {
+                    if (_fragmentCameraBinding != null && isScanningActive) {
+                        fragmentCameraBinding.tvDetectionFeedback.text = msg
+                        if (isDebugOverlayVisible && grid != null) {
+                            fragmentCameraBinding.tvDebugLatency.text =
+                                "depth ${depthEstimator.lastDepthMs}ms | L=${f(grid.leftNear)} C=${f(grid.centerNear)} R=${f(grid.rightNear)}"
+                        }
+                    }
+                }
+                audioHapticManager.speak(msg, isUrgent = false)
+                audioHapticManager.vibrateHazard()
+            }
+        }
+
+        // Stairs-v4 Step 1: Run stairs-up edge detector on the same frame bitmap.
+        // We need a fresh copy since wallBitmap was already recycled above.
+        val stairsBitmap: Bitmap? = try {
+            val bmp = Bitmap.createBitmap(
+                imageProxy.width, imageProxy.height, Bitmap.Config.ARGB_8888
+            )
+            val buffer2 = imageProxy.planes[0].buffer
+            buffer2.rewind()
+            bmp.copyPixelsFromBuffer(buffer2)
+            buffer2.rewind()
+            bmp
+        } catch (e: Exception) {
+            Log.w(TAG, "Stairs bitmap copy failed: ${e.message}")
+            null
+        }
+        if (stairsBitmap != null) {
+            val rotDeg = imageProxy.imageInfo.rotationDegrees
+            val stairsUp = stairsDetector.analyzeFrame(stairsBitmap, rotDeg)
+            stairsBitmap.recycle()
+
+            // Update debug overlay with stairs analysis time
+            if (isDebugOverlayVisible) {
+                activity?.runOnUiThread {
+                    if (_fragmentCameraBinding != null) {
+                        val existingText = fragmentCameraBinding.tvDebugLatency.text?.toString() ?: ""
+                        fragmentCameraBinding.tvDebugLatency.text =
+                            "$existingText | stairs ${stairsDetector.lastAnalysisMs}ms pk=${stairsDetector.lastPeakCount} cv=${"%0.2f".format(stairsDetector.lastSpacingCV)}"
+                    }
+                }
+            }
+
+            if (stairsUp) {
+                val lang = (activity as? MainActivity)?.activeLanguage ?: Messages.Language.ENGLISH
+                val msg = Messages.stepsUp(lang)
+                lastAlertReason = "STAIRS_EDGE_UP"
+                Log.i(TAG, "STAIRS UP ALERT (edge heuristic): $msg")
+                activity?.runOnUiThread {
+                    if (_fragmentCameraBinding != null && isScanningActive) {
+                        fragmentCameraBinding.tvDetectionFeedback.text = msg
+                    }
+                }
+                audioHapticManager.speak(msg, isUrgent = false)
                 audioHapticManager.vibrateHazard()
             }
         }
@@ -492,6 +589,9 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
         Log.v(TAG, "Forwarding frame to detector at ${SystemClock.uptimeMillis()}ms")
         objectDetectorHelper.detectLivestreamFrame(imageProxy)
     }
+
+    /** Format float to 2 decimal places for debug overlay. */
+    private fun f(v: Float) = "%.2f".format(v)
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
@@ -623,10 +723,15 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
                     }
 
                     // Step 1: Choose correct message based on mapped label
+                    // Step 7: Custom hazard labels (pothole / stairs / door) get dedicated messages
                     val message = when (label) {
-                        "wall"     -> Messages.wallAhead(lang)
-                        "obstacle" -> Messages.obstacleAhead(lang, result.direction)
-                        else       -> Messages.alert(
+                        "wall"                          -> Messages.wallAhead(lang)
+                        "obstacle"                      -> Messages.obstacleAhead(lang, result.direction)
+                        "pothole"                       -> Messages.pothole(lang, result.direction)
+                        "stairs", "staircase",
+                        "step", "steps"                 -> Messages.stairs(lang, result.direction)
+                        "door"                          -> Messages.door(lang, result.direction)
+                        else                            -> Messages.alert(
                             lang          = lang,
                             label         = label,
                             direction     = result.direction,
