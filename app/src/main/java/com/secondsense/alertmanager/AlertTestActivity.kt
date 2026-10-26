@@ -8,14 +8,15 @@ import android.os.Bundle
 import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.secondsense.alertmanager.databinding.ActivityMainBinding
+import com.google.mediapipe.examples.objectdetection.R
+import com.google.mediapipe.examples.objectdetection.databinding.ActivityAlertTestBinding
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class MainActivity : AppCompatActivity(), AlertManager.AlertEventListener {
+class AlertTestActivity : AppCompatActivity(), AlertManager.AlertEventListener {
 
-    private lateinit var binding: ActivityMainBinding
+    private lateinit var binding: ActivityAlertTestBinding
     private lateinit var alertManager: AlertManager
 
     private var currentStrength: Int = 255
@@ -29,7 +30,7 @@ class MainActivity : AppCompatActivity(), AlertManager.AlertEventListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
+        binding = ActivityAlertTestBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
         // Initialize AlertManager with TTS-ready callback
@@ -254,7 +255,6 @@ class MainActivity : AppCompatActivity(), AlertManager.AlertEventListener {
 
     /**
      * Called by AlertManager after each [processFrame] call.
-     *
      * Displays whether the alert fired or which rule blocked it.
      */
     override fun onFrameProcessed(candidate: AlertCandidate?, blockedReason: String?) {
@@ -276,7 +276,6 @@ class MainActivity : AppCompatActivity(), AlertManager.AlertEventListener {
             } else {
                 appendLog("⛔ BLOCKED — $blockedReason")
             }
-            // Refresh badges to reflect latest state
             refreshRuleStatusBadges(ruleTestLabel)
         }
     }
