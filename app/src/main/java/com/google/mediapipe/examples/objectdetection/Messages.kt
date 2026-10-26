@@ -106,10 +106,69 @@ object Messages {
 
     // ── Wall / Obstacle ahead ────────────────────────────────────────────────
 
+    /** Generic "wall ahead" — no direction guidance. */
     fun wallAhead(lang: Language): String = when (lang) {
-        Language.ENGLISH -> "Obstacle ahead"
-        Language.HINDI   -> "आगे रुकावट है"
-        Language.KANNADA -> "ಮುಂದೆ ಅಡಚಣೆ ಇದೆ"
+        Language.ENGLISH -> "Wall ahead"
+        Language.HINDI   -> "आगे दीवार है"
+        Language.KANNADA -> "ಮುಂದೆ ಗೋಡೆ ಇದೆ"
+    }
+
+    /** Obstacle (relabelled COCO class) with direction. */
+    fun obstacleAhead(lang: Language, direction: String): String = when (lang) {
+        Language.ENGLISH -> "Obstacle ${dirEn(direction)}"
+        Language.HINDI   -> "${dirHi(direction)} रुकावट है"
+        Language.KANNADA -> "${dirKn(direction)} ಅಡಚಣೆ ಇದೆ"
+    }
+
+    /** Wall with a directional guidance hint (Step 3). */
+    fun wallWithGuidance(lang: Language, guidance: String): String = when (lang) {
+        Language.ENGLISH -> "Wall ahead, $guidance"
+        Language.HINDI   -> "आगे दीवार है, $guidance"
+        Language.KANNADA -> "ಮುಂದೆ ಗೋಡೆ ಇದೆ, $guidance"
+    }
+
+    // ── Step 3: Movement guidance phrases ───────────────────────────────────
+
+    fun moveLeft(lang: Language): String = when (lang) {
+        Language.ENGLISH -> "move left"
+        Language.HINDI   -> "बाईं ओर जाएं"
+        Language.KANNADA -> "ಎಡಕ್ಕೆ ಹೋಗಿ"
+    }
+
+    fun moveRight(lang: Language): String = when (lang) {
+        Language.ENGLISH -> "move right"
+        Language.HINDI   -> "दाईं ओर जाएं"
+        Language.KANNADA -> "ಬಲಕ್ಕೆ ಹೋಗಿ"
+    }
+
+    fun stop(lang: Language): String = when (lang) {
+        Language.ENGLISH -> "stop"
+        Language.HINDI   -> "रुकें"
+        Language.KANNADA -> "ನಿಲ್ಲಿ"
+    }
+
+    /** Combines an alert with directional guidance: "Wall ahead, move left" */
+    fun alertWithGuidance(lang: Language, alertMsg: String, guidance: String): String =
+        "$alertMsg, $guidance"
+
+    // ── Step 5: Depth heuristic alerts ──────────────────────────────────────
+
+    fun dropAhead(lang: Language): String = when (lang) {
+        Language.ENGLISH -> "Drop or steps ahead"
+        Language.HINDI   -> "आगे ढलान या सीढ़ियाँ हैं"
+        Language.KANNADA -> "ಮುಂದೆ ಇಳಿಜಾರು ಅಥವಾ ಮೆಟ್ಟಿಲುಗಳಿವೆ"
+    }
+
+    fun stepsUp(lang: Language): String = when (lang) {
+        Language.ENGLISH -> "Steps up ahead"
+        Language.HINDI   -> "आगे ऊपर सीढ़ियाँ हैं"
+        Language.KANNADA -> "ಮುಂದೆ ಮೇಲೆ ಮೆಟ್ಟಿಲುಗಳಿವೆ"
+    }
+
+    fun depthObstacle(lang: Language, guidance: String = ""): String = when (lang) {
+        Language.ENGLISH -> if (guidance.isEmpty()) "Obstacle ahead" else "Obstacle ahead, $guidance"
+        Language.HINDI   -> if (guidance.isEmpty()) "आगे रुकावट है" else "आगे रुकावट है, $guidance"
+        Language.KANNADA -> if (guidance.isEmpty()) "ಮುಂದೆ ಅಡಚಣೆ ಇದೆ" else "ಮುಂದೆ ಅಡಚಣೆ ಇದೆ, $guidance"
     }
 
     // ── Custom hazard labels (pothole / stairs / door) ───────────────────────

@@ -46,6 +46,7 @@ import com.google.mediapipe.examples.objectdetection.MainViewModel
 import com.google.mediapipe.examples.objectdetection.Messages
 import com.google.mediapipe.examples.objectdetection.ObjectDetectorHelper
 import com.google.mediapipe.examples.objectdetection.R
+import com.google.mediapipe.examples.objectdetection.LabelMapper
 import com.google.mediapipe.examples.objectdetection.SpatialLogic
 import com.google.mediapipe.examples.objectdetection.WallDetector
 import com.google.mediapipe.examples.objectdetection.databinding.FragmentCameraBinding
@@ -564,7 +565,17 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
 
                 for (detection in sortedDetections) {
                     val box = detection.boundingBox() ?: continue
-                    val label = detection.categories().firstOrNull()?.categoryName() ?: "obstacle"
+                    val rawLabel = detection.categories().firstOrNull()?.categoryName() ?: "obstacle"
+                    val score    = detection.categories().firstOrNull()?.score() ?: 0f
+
+                    // Step 1: Per-class threshold filtering
+                    val threshold = LabelMapper.thresholdFor(rawLabel)
+                    if (score < threshold) continue
+
+                    // Step 1: Large-box geometry check and label remapping
+                    val boxWidthRatio  = (box.right - box.left)   / frameWidth
+                    val boxHeightRatio = (box.bottom - box.top)   / frameHeight
+                    val label = LabelMapper.map(rawLabel, boxWidthRatio, boxHeightRatio)
 
                     // Calculate direction and distance
                     val result = DistanceDirectionCalculator.calculate(
@@ -605,21 +616,24 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
                             // QUEUE_FLUSH interrupts any lower-priority speech
                             audioHapticManager.speak(dangerMsg, isUrgent = true)
                             audioHapticManager.vibrateHazard()
-                            // Torch on — handled in Step 4 via TorchController
                             (activity as? MainActivity)?.torchController?.triggerDangerTorch()
                         }
                         alertDispatched = true
                         break
                     }
 
-                    // Normal alert path
-                    val message = Messages.alert(
-                        lang = lang,
-                        label = label,
-                        direction = result.direction,
-                        distanceState = result.distanceState
-                    )
-                    Log.i(TAG, "Detection Alert: $message (dir=${result.direction})")
+                    // Step 1: Choose correct message based on mapped label
+                    val message = when (label) {
+                        "wall"     -> Messages.wallAhead(lang)
+                        "obstacle" -> Messages.obstacleAhead(lang, result.direction)
+                        else       -> Messages.alert(
+                            lang          = lang,
+                            label         = label,
+                            direction     = result.direction,
+                            distanceState = result.distanceState
+                        )
+                    }
+                    Log.i(TAG, "Detection Alert: $message (raw=$rawLabel mapped=$label dir=${result.direction} score=$score)")
                     fragmentCameraBinding.tvDetectionFeedback.text = message
 
                     val isRepeatedAlert = message.equals(lastSpokenAlertMessage, ignoreCase = true)
