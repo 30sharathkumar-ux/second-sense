@@ -11,6 +11,24 @@
     android:layout_height="match_parent"
     android:background="@android:color/black">
 
+    <!-- Debug latency overlay: shows measured ms/frame. Visible when debug mode is on. -->
+    <TextView
+        android:id="@+id/tv_debug_latency"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:layout_marginTop="8dp"
+        android:background="#88000000"
+        android:fontFamily="monospace"
+        android:padding="4dp"
+        android:text="0 ms/frame"
+        android:textColor="#FFFFFFFF"
+        android:textSize="11sp"
+        android:visibility="gone"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        tools:visibility="visible" />
+
     <!-- Full-screen camera preview -->
     <androidx.camera.view.PreviewView
         android:id="@+id/view_finder"

@@ -20,6 +20,7 @@ import android.content.res.Configuration
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
+import android.util.Size
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -54,8 +55,6 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
     private val TAG = "SecondSense"
 
     companion object {
-        /** Frame analysis interval in milliseconds (every 3 seconds) */
-        private const val FRAME_INTERVAL_MS = 3000L
         /** 3-second cooldown timer between repeated voice alerts to avoid audio spam */
         private const val VOICE_ALERT_COOLDOWN_MS = 3000L
     }
@@ -79,13 +78,13 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
     @Volatile
     private var isScanningActive: Boolean = false
 
-    /** Timestamp of the last processed frame — used for 3-second throttle */
-    @Volatile
-    private var lastAnalyzedTimestamp = 0L
-
     /** Cooldown tracking for repeated voice alerts */
     private var lastVoiceAlertTimestamp = 0L
     private var lastSpokenAlertMessage = ""
+
+    /** Debug mode: show ms/frame overlay. Toggle by long-pressing the status badge. */
+    @Volatile
+    private var isDebugOverlayVisible = false
 
     /** Blocking ML operations are performed using this executor */
     private lateinit var backgroundExecutor: ExecutorService
@@ -182,6 +181,14 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
 
         // Set up the large Start / Stop toggle button and UI state
         setupScanToggleButton()
+
+        // Long-press the status badge to toggle the ms/frame debug overlay
+        fragmentCameraBinding.layoutStatus.setOnLongClickListener {
+            isDebugOverlayVisible = !isDebugOverlayVisible
+            fragmentCameraBinding.tvDebugLatency.visibility =
+                if (isDebugOverlayVisible) View.VISIBLE else View.GONE
+            true
+        }
     }
 
     /**
@@ -278,16 +285,21 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
                 .setTargetRotation(fragmentCameraBinding.viewFinder.display.rotation)
                 .build()
 
+        // Target 640×480 for analysis: low enough latency, high enough accuracy.
+        // STRATEGY_KEEP_ONLY_LATEST drops stale frames so detection always runs on the newest image.
         imageAnalyzer =
             ImageAnalysis.Builder()
-                .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                .setTargetResolution(Size(
+                    ObjectDetectorHelper.ANALYSIS_WIDTH,
+                    ObjectDetectorHelper.ANALYSIS_HEIGHT
+                ))
                 .setTargetRotation(fragmentCameraBinding.viewFinder.display.rotation)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .build()
                 .also {
                     it.setAnalyzer(backgroundExecutor) { imageProxy ->
-                        throttledAnalyze(imageProxy)
+                        detectFrame(imageProxy)
                     }
                 }
 
@@ -308,28 +320,17 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
     }
 
     /**
-     * Throttled frame analyzer:
-     * 1. If scanning is paused, drops the frame immediately to conserve battery and CPU.
-     * 2. When active, only processes frames every [FRAME_INTERVAL_MS] (3 seconds).
+     * Frame analyzer: forwards every frame to the detector when scanning is active.
+     * STRATEGY_KEEP_ONLY_LATEST ensures we never pile up frames on the background thread.
+     * Detection itself runs on backgroundExecutor (never the main thread).
      */
-    private fun throttledAnalyze(imageProxy: ImageProxy) {
+    private fun detectFrame(imageProxy: ImageProxy) {
         // Drop frames immediately if scanning loop is not active
         if (!isScanningActive) {
             imageProxy.close()
             return
         }
-
-        val currentTime = SystemClock.uptimeMillis()
-
-        if (currentTime - lastAnalyzedTimestamp < FRAME_INTERVAL_MS) {
-            // Skip this frame — throttled to 3 seconds
-            imageProxy.close()
-            return
-        }
-
-        // Update the timestamp and forward to detector
-        lastAnalyzedTimestamp = currentTime
-        Log.d(TAG, "Processing scan frame at ${currentTime}ms (3-second interval)")
+        Log.v(TAG, "Forwarding frame to detector at ${SystemClock.uptimeMillis()}ms")
         objectDetectorHelper.detectLivestreamFrame(imageProxy)
     }
 
@@ -347,6 +348,12 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
                 if (!isScanningActive) {
                     fragmentCameraBinding.overlay.clear()
                     return@runOnUiThread
+                }
+
+                // Update debug latency overlay (ms/frame = inference time reported by helper)
+                if (isDebugOverlayVisible) {
+                    fragmentCameraBinding.tvDebugLatency.text =
+                        "${resultBundle.inferenceTime} ms/frame"
                 }
 
                 val detectionResult = resultBundle.results[0]

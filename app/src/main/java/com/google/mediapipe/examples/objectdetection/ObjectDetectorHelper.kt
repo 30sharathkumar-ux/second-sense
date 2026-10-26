@@ -35,7 +35,8 @@ import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetectorResult
 class ObjectDetectorHelper(
     var threshold: Float = THRESHOLD_DEFAULT,
     var maxResults: Int = MAX_RESULTS_DEFAULT,
-    var currentDelegate: Int = DELEGATE_CPU,
+    // Default to GPU; setupObjectDetector() will fall back to CPU if GPU unavailable.
+    var currentDelegate: Int = DELEGATE_GPU,
     var currentModel: Int = MODEL_EFFICIENTDETV0,
     var runningMode: RunningMode = RunningMode.IMAGE,
     val context: Context,
@@ -48,6 +49,9 @@ class ObjectDetectorHelper(
     private var objectDetector: ObjectDetector? = null
     private var imageRotation = 0
     private lateinit var imageProcessingOptions: ImageProcessingOptions
+
+    // Pre-allocated bitmap buffer — reused every frame to avoid per-frame GC pressure.
+    private var bitmapBuffer: Bitmap? = null
 
     init {
         setupObjectDetector()
@@ -63,19 +67,38 @@ class ObjectDetectorHelper(
     // that are created on the main thread and used on a background thread, but
     // the GPU delegate needs to be used on the thread that initialized the detector
     fun setupObjectDetector() {
-        // Set general detection options, including number of used threads
+        // Try GPU first, fall back to CPU if GPU is unavailable on this device/thread.
+        if (currentDelegate == DELEGATE_GPU) {
+            try {
+                setupObjectDetectorWithDelegate(DELEGATE_GPU)
+                Log.i(TAG, "ObjectDetector initialized with GPU delegate")
+                return
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "GPU delegate failed (${e.message}), falling back to CPU")
+                currentDelegate = DELEGATE_CPU
+            }
+        }
+        // CPU path (also used as fallback from GPU failure)
+        try {
+            setupObjectDetectorWithDelegate(DELEGATE_CPU)
+            Log.i(TAG, "ObjectDetector initialized with CPU delegate")
+        } catch (e: Exception) {
+            objectDetectorListener?.onError(
+                "Object detector failed to initialize. See error logs for details"
+            )
+            Log.e(TAG, "TFLite failed to load model with error: " + e.message)
+        }
+    }
+
+    /**
+     * Internal helper that creates the ObjectDetector with a specific delegate.
+     * Throws RuntimeException if the delegate (e.g., GPU) is not supported.
+     */
+    private fun setupObjectDetectorWithDelegate(delegate: Int) {
         val baseOptionsBuilder = BaseOptions.builder()
-
-        // Use the specified hardware for running the model. Default to CPU
-        when (currentDelegate) {
-            DELEGATE_CPU -> {
-                baseOptionsBuilder.setDelegate(Delegate.CPU)
-            }
-
-            DELEGATE_GPU -> {
-                // Is there a check for GPU being supported?
-                baseOptionsBuilder.setDelegate(Delegate.GPU)
-            }
+        when (delegate) {
+            DELEGATE_CPU -> baseOptionsBuilder.setDelegate(Delegate.CPU)
+            DELEGATE_GPU -> baseOptionsBuilder.setDelegate(Delegate.GPU)
         }
 
         val modelName = when (currentModel) {
@@ -83,7 +106,6 @@ class ObjectDetectorHelper(
             MODEL_EFFICIENTDETV2 -> "efficientdet-lite2.tflite"
             else -> "efficientdet-lite0.tflite"
         }
-
         baseOptionsBuilder.setModelAssetPath(modelName)
 
         // Check if runningMode is consistent with objectDetectorListener
@@ -95,49 +117,29 @@ class ObjectDetectorHelper(
                     )
                 }
             }
-
-            RunningMode.IMAGE, RunningMode.VIDEO -> {
-                // no-op
-            }
+            RunningMode.IMAGE, RunningMode.VIDEO -> { /* no-op */ }
         }
 
-        try {
-            val optionsBuilder = ObjectDetector.ObjectDetectorOptions.builder()
-                .setBaseOptions(baseOptionsBuilder.build())
-                .setScoreThreshold(threshold).setRunningMode(runningMode)
-                .setMaxResults(maxResults)
+        val optionsBuilder = ObjectDetector.ObjectDetectorOptions.builder()
+            .setBaseOptions(baseOptionsBuilder.build())
+            .setScoreThreshold(threshold)
+            .setRunningMode(runningMode)
+            .setMaxResults(maxResults)
 
-            imageProcessingOptions = ImageProcessingOptions.builder()
-                .setRotationDegrees(imageRotation).build()
+        imageProcessingOptions = ImageProcessingOptions.builder()
+            .setRotationDegrees(imageRotation).build()
 
-            when (runningMode) {
-                RunningMode.IMAGE, RunningMode.VIDEO -> optionsBuilder.setRunningMode(
-                    runningMode
-                )
-
-                RunningMode.LIVE_STREAM -> optionsBuilder.setRunningMode(
-                    runningMode
-                ).setResultListener(this::returnLivestreamResult)
+        when (runningMode) {
+            RunningMode.IMAGE, RunningMode.VIDEO ->
+                optionsBuilder.setRunningMode(runningMode)
+            RunningMode.LIVE_STREAM ->
+                optionsBuilder
+                    .setRunningMode(runningMode)
+                    .setResultListener(this::returnLivestreamResult)
                     .setErrorListener(this::returnLivestreamError)
-            }
-
-            val options = optionsBuilder.build()
-            objectDetector = ObjectDetector.createFromOptions(context, options)
-        } catch (e: IllegalStateException) {
-            objectDetectorListener?.onError(
-                "Object detector failed to initialize. See error logs for details"
-            )
-            Log.e(TAG, "TFLite failed to load model with error: " + e.message)
-        } catch (e: RuntimeException) {
-            objectDetectorListener?.onError(
-                "Object detector failed to initialize. See error logs for " + "details",
-                GPU_ERROR
-            )
-            Log.e(
-                TAG,
-                "Object detector failed to load model with error: " + e.message
-            )
         }
+
+        objectDetector = ObjectDetector.createFromOptions(context, optionsBuilder.build())
     }
 
     // Return running status of recognizer helper
@@ -238,30 +240,34 @@ class ObjectDetectorHelper(
 
         if (runningMode != RunningMode.LIVE_STREAM) {
             throw IllegalArgumentException(
-                "Attempting to call detectLivestreamFrame" + " while not using RunningMode.LIVE_STREAM"
+                "Attempting to call detectLivestreamFrame while not using RunningMode.LIVE_STREAM"
             )
         }
 
         val frameTime = SystemClock.uptimeMillis()
 
-        // Copy out RGB bits from the frame to a bitmap buffer
-        val bitmapBuffer = Bitmap.createBitmap(
-            imageProxy.width, imageProxy.height, Bitmap.Config.ARGB_8888
-        )
-        imageProxy.use { bitmapBuffer.copyPixelsFromBuffer(imageProxy.planes[0].buffer) }
-        imageProxy.close()
-
-        // If the input image rotation is change, stop all detector
+        // If the input image rotation changed, reinitialise the detector before proceeding.
         if (imageProxy.imageInfo.rotationDegrees != imageRotation) {
             imageRotation = imageProxy.imageInfo.rotationDegrees
+            imageProxy.close()
             clearObjectDetector()
             setupObjectDetector()
             return
         }
 
-        // Convert the input Bitmap object to an MPImage object to run inference
-        val mpImage = BitmapImageBuilder(bitmapBuffer).build()
+        // Reuse pre-allocated bitmap buffer to avoid per-frame allocation / GC pressure.
+        val buf = bitmapBuffer?.takeIf {
+            it.width == imageProxy.width && it.height == imageProxy.height
+        } ?: Bitmap.createBitmap(
+            imageProxy.width, imageProxy.height, Bitmap.Config.ARGB_8888
+        ).also { bitmapBuffer = it }
 
+        // Copy RGBA pixels from the ImageProxy plane into the reused buffer.
+        imageProxy.use { buf.copyPixelsFromBuffer(imageProxy.planes[0].buffer) }
+        imageProxy.close()
+
+        // Convert the input Bitmap object to an MPImage object to run inference.
+        val mpImage = BitmapImageBuilder(buf).build()
         detectAsync(mpImage, frameTime)
     }
 
@@ -354,6 +360,10 @@ class ObjectDetectorHelper(
         const val GPU_ERROR = 1
 
         const val TAG = "ObjectDetectorHelper"
+
+        /** Analysis resolution target — 640×480 keeps latency low while maintaining accuracy. */
+        const val ANALYSIS_WIDTH = 640
+        const val ANALYSIS_HEIGHT = 480
     }
 
     // Used to pass results or errors back to the calling class
