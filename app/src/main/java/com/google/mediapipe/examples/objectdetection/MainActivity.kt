@@ -49,6 +49,8 @@ class MainActivity : AppCompatActivity() {
      */
     val torchController = TorchController()
 
+    /** Step 5: Battery monitor — speaks low-battery alerts via BroadcastReceiver. */
+    internal lateinit var batteryMonitor: BatteryMonitor
     /** Active language for TTS messages. Toggle via the debug screen (Step 8). */
     var activeLanguage: Messages.Language = Messages.Language.ENGLISH
         private set
@@ -72,11 +74,28 @@ class MainActivity : AppCompatActivity() {
         // Initialize Audio & Haptics Manager (offline TTS & vibration)
         audioHapticManager = AudioHapticManager(this)
 
+        // Step 5: Battery monitor (registered in onStart)
+        batteryMonitor = BatteryMonitor(
+            context          = this,
+            audioHapticManager = audioHapticManager,
+            languageProvider = { activeLanguage }
+        )
+
         activityMainBinding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(activityMainBinding.root)
 
         // Enable full-screen immersive mode
         setupImmersiveMode()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (this::batteryMonitor.isInitialized) batteryMonitor.register()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (this::batteryMonitor.isInitialized) batteryMonitor.unregister()
     }
 
     override fun onResume() {
