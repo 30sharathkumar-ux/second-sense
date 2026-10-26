@@ -492,6 +492,46 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
                 depthEstimator.analyzeFrame(wallBitmap)
             } else null
 
+            // Stairs-v4 Step 2: Feed the depth map to StairsDetector for stairs-down / drop-off.
+            // This runs BEFORE wallBitmap.recycle() because depthEstimator.lastDepthMap is already
+            // a separate FloatArray — we just need it to exist.
+            var stairsDownFired = false
+            if (this::depthEstimator.isInitialized) {
+                val dm = depthEstimator.lastDepthMap
+                if (dm != null) {
+                    val stairsDown = stairsDetector.analyzeDepthMap(
+                        dm, DepthEstimator.MODEL_SIZE, depthEstimator.lastDepthMaxVal
+                    )
+                    if (stairsDown) {
+                        stairsDownFired = true
+                        val lang = (activity as? MainActivity)?.activeLanguage ?: Messages.Language.ENGLISH
+                        val msg = Messages.stairsDownStop(lang)
+                        lastAlertReason = "STAIRS_DEPTH_DOWN"
+                        Log.i(TAG, "*** STAIRS DOWN / DROP ALERT (depth) ***: $msg")
+                        activity?.runOnUiThread {
+                            if (_fragmentCameraBinding != null && isScanningActive) {
+                                fragmentCameraBinding.tvDetectionFeedback.text = msg
+                            }
+                        }
+                        // DANGER level: urgent speech (QUEUE_FLUSH) + hazard vibration + torch
+                        audioHapticManager.speak(msg, isUrgent = true)
+                        audioHapticManager.vibrateHazard()
+                        (activity as? MainActivity)?.torchController?.triggerDangerTorch()
+                    }
+
+                    // Debug overlay: show depth stairs info
+                    if (isDebugOverlayVisible) {
+                        activity?.runOnUiThread {
+                            if (_fragmentCameraBinding != null) {
+                                val existing = fragmentCameraBinding.tvDebugLatency.text?.toString() ?: ""
+                                fragmentCameraBinding.tvDebugLatency.text =
+                                    "$existing | dStairs ${stairsDetector.lastDepthAnalysisMs}ms j=${"%.2f".format(stairsDetector.lastDepthJump)} p=${stairsDetector.lastPlateauCount}"
+                            }
+                        }
+                    }
+                }
+            }
+
             wallBitmap.recycle()
 
             if (isWall) {
@@ -509,7 +549,8 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
             }
 
             // Step 2: Handle depth alert (only if it provides higher info than luminance wall)
-            if (depthAlert != null && depthAlert.type != DepthEstimator.AlertType.NONE && !isWall) {
+            // Stairs-v4: skip if stairs-down already fired (it's higher priority)
+            if (depthAlert != null && depthAlert.type != DepthEstimator.AlertType.NONE && !isWall && !stairsDownFired) {
                 val lang = (activity as? MainActivity)?.activeLanguage ?: Messages.Language.ENGLISH
                 val grid = depthEstimator.lastGrid
                 val guidanceStr = when (depthAlert.guidance) {

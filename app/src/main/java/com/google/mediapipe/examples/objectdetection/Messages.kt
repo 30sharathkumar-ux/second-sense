@@ -159,6 +159,13 @@ object Messages {
         Language.KANNADA -> "ಮುಂದೆ ಇಳಿಜಾರು ಅಥವಾ ಮೆಟ್ಟಿಲುಗಳಿವೆ"
     }
 
+    /** Stairs-v4 Step 2: DANGER-level stairs-down / drop-off alert. */
+    fun stairsDownStop(lang: Language): String = when (lang) {
+        Language.ENGLISH -> "Drop or steps down ahead, stop"
+        Language.HINDI   -> "आगे नीचे सीढ़ियाँ या गिरावट है, रुकें"
+        Language.KANNADA -> "ಮುಂದೆ ಕೆಳಗೆ ಮೆಟ್ಟಿಲು ಅಥವಾ ಕುಸಿತ, ನಿಲ್ಲಿ"
+    }
+
     fun stepsUp(lang: Language): String = when (lang) {
         Language.ENGLISH -> "Steps up ahead"
         Language.HINDI   -> "आगे ऊपर सीढ़ियाँ हैं"

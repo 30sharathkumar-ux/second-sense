@@ -56,13 +56,45 @@ class StairsDetector {
          */
         const val MIN_PERSPECTIVE_RATIO = 0.50f
 
-        // ── Temporal gating ────────────────────────────────────────────────
+        // ── Temporal gating (STAIRS_UP) ─────────────────────────────────────
         /** Run detector every Nth analysis frame. */
         const val RUN_EVERY_N_FRAMES = 2
         /** Consecutive candidate frames before alert fires. */
         const val CONFIRM_FRAMES = 3
         /** Cooldown between STAIRS_UP alerts (ms). */
         const val COOLDOWN_MS = 4_000L
+
+        // ══════════════════════════════════════════════════════════════════════
+        // Step 2: STAIRS_DOWN / DROP-OFF constants (depth discontinuity)
+        // ══════════════════════════════════════════════════════════════════════
+
+        /** Width of centre column strip as fraction of depth map width. */
+        const val DEPTH_CENTER_FRAC = 0.34f
+
+        /**
+         * Minimum normalised closeness drop within [DEPTH_JUMP_WINDOW_ROWS]
+         * rows to classify as a sharp depth discontinuity.
+         * Range 0..1.  Higher = less sensitive.
+         */
+        const val DEPTH_JUMP_THRESHOLD = 0.20f
+
+        /** Number of consecutive depth-map rows over which to measure the jump. */
+        const val DEPTH_JUMP_WINDOW_ROWS = 8
+
+        /**
+         * Minimum depth difference between two adjacent plateau averages to
+         * count them as separate plateaus.
+         */
+        const val DEPTH_PLATEAU_DELTA = 0.12f
+
+        /** Minimum number of consecutive rows at similar depth to form a plateau. */
+        const val DEPTH_PLATEAU_MIN_LEN = 6
+
+        /** Minimum number of distinct plateaus to classify as STAIRS_DOWN. */
+        const val DEPTH_MIN_PLATEAUS = 2
+
+        /** Consecutive depth frames with STAIRS_DOWN before alert fires. */
+        const val DEPTH_CONFIRM_FRAMES = 3
     }
 
     // ── State ────────────────────────────────────────────────────────────────
@@ -76,18 +108,33 @@ class StairsDetector {
     private var profileBuf: FloatArray? = null      // 1-D edge-strength profile
     private var sampleBitmap: Bitmap? = null
 
+    // ── Step 2: depth state ──────────────────────────────────────────────────
+    private var depthConfirmCount = 0
+    private var depthProfileBuf: FloatArray? = null  // reusable vertical closeness profile
+
     // ── Debug fields (read from CameraFragment for overlay) ─────────────────
 
+    // Step 1 debug
     /** Number of peaks found in the last analysed frame. */
     @Volatile var lastPeakCount = 0; private set
     /** Spacing CV (coefficient of variation) of the last analysed frame. */
     @Volatile var lastSpacingCV = 0f; private set
     /** Perspective ratio of the last analysed frame. */
     @Volatile var lastPerspectiveRatio = 0f; private set
-    /** Wall-clock ms taken by the last analysis. */
+    /** Wall-clock ms taken by the last edge analysis. */
     @Volatile var lastAnalysisMs = 0L; private set
     /** True if the last frame was classified as STAIRS_UP candidate. */
     @Volatile var lastIsCandidate = false; private set
+
+    // Step 2 debug
+    /** Largest depth jump found in the last depth frame. */
+    @Volatile var lastDepthJump = 0f; private set
+    /** Number of depth plateaus found in the last depth frame. */
+    @Volatile var lastPlateauCount = 0; private set
+    /** Wall-clock ms taken by the last depth analysis. */
+    @Volatile var lastDepthAnalysisMs = 0L; private set
+    /** True if the last depth frame was classified as STAIRS_DOWN candidate. */
+    @Volatile var lastDepthIsCandidate = false; private set
 
     // ── Public API ───────────────────────────────────────────────────────────
 
@@ -244,12 +291,145 @@ class StairsDetector {
 
     /** Reset state (call when scanning stops). */
     fun reset() {
+        // Step 1 state
         confirmCount = 0
         lastAlertTimeMs = 0L
         lastPeakCount = 0
         lastSpacingCV = 0f
         lastPerspectiveRatio = 0f
         lastIsCandidate = false
+        // Step 2 state
+        depthConfirmCount = 0
+        lastDepthJump = 0f
+        lastPlateauCount = 0
+        lastDepthIsCandidate = false
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Step 2: STAIRS_DOWN / DROP-OFF via depth discontinuity
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Analyse the MiDaS depth map for stairs-down / drop-off patterns.
+     * Returns `true` if a DANGER-level STAIRS_DOWN alert should fire.
+     *
+     * The depth map is inverse depth (larger = closer). This method:
+     *   1. Normalises values to 0..1 by dividing by [maxVal].
+     *   2. Builds a vertical closeness profile from the centre columns,
+     *      bottom to top (index 0 = bottom row = nearest to user).
+     *   3. Detects sharp jumps: closeness drops by > [DEPTH_JUMP_THRESHOLD]
+     *      within [DEPTH_JUMP_WINDOW_ROWS] consecutive rows.
+     *   4. Detects stepped plateaus: 2+ plateaus separated by [DEPTH_PLATEAU_DELTA].
+     *   5. Requires [DEPTH_CONFIRM_FRAMES] consecutive depth frames.
+     *   6. No cooldown — DANGER level bypasses cooldown.
+     *
+     * MUST be called on a background thread.
+     *
+     * @param depthMap   Raw MiDaS output (MODEL_SIZE × MODEL_SIZE floats, inverse depth).
+     * @param modelSize  Side length of the square depth map (typically 256).
+     * @param maxVal     Maximum value in depthMap for normalisation.
+     */
+    fun analyzeDepthMap(depthMap: FloatArray, modelSize: Int, maxVal: Float): Boolean {
+        val t0 = SystemClock.uptimeMillis()
+
+        // 1. Define centre column range
+        val colStart = ((1f - DEPTH_CENTER_FRAC) / 2f * modelSize).toInt()
+        val colEnd   = ((1f + DEPTH_CENTER_FRAC) / 2f * modelSize).toInt()
+        val colCount = colEnd - colStart
+        if (colCount < 2) {
+            lastDepthIsCandidate = false
+            lastDepthAnalysisMs = SystemClock.uptimeMillis() - t0
+            return false
+        }
+
+        // 2. Build vertical closeness profile: bottom-to-top (index 0 = bottom row)
+        val profileLen = modelSize
+        val profile = getOrCreateDepthProfile(profileLen)
+        val invMax = if (maxVal > 0f) 1f / maxVal else 1f
+
+        for (i in 0 until profileLen) {
+            val row = modelSize - 1 - i  // bottom row first
+            var rowSum = 0f
+            for (c in colStart until colEnd) {
+                rowSum += depthMap[row * modelSize + c] * invMax
+            }
+            profile[i] = rowSum / colCount  // normalised 0..1 closeness
+        }
+
+        // 3. Detect sharp jump: closeness drops by > threshold within window
+        var maxJump = 0f
+        for (i in 0 until profileLen - DEPTH_JUMP_WINDOW_ROWS) {
+            val drop = profile[i] - profile[i + DEPTH_JUMP_WINDOW_ROWS]
+            if (drop > maxJump) maxJump = drop
+        }
+        lastDepthJump = maxJump
+        val hasSharpJump = maxJump > DEPTH_JUMP_THRESHOLD
+
+        // 4. Detect stepped plateaus
+        val plateauCount = countPlateaus(profile, profileLen)
+        lastPlateauCount = plateauCount
+        val hasPlateaus = plateauCount >= DEPTH_MIN_PLATEAUS
+
+        val isCandidate = hasSharpJump || hasPlateaus
+        lastDepthIsCandidate = isCandidate
+        lastDepthAnalysisMs = SystemClock.uptimeMillis() - t0
+
+        Log.d(TAG, "DEPTH: jump=%.3f (thr=%.2f) plateaus=$plateauCount candidate=$isCandidate [${lastDepthAnalysisMs}ms]"
+            .format(lastDepthJump, DEPTH_JUMP_THRESHOLD))
+
+        if (!isCandidate) {
+            depthConfirmCount = 0
+            return false
+        }
+
+        // 5. Temporal confirmation (no cooldown — DANGER bypasses)
+        depthConfirmCount++
+        Log.d(TAG, "STAIRS_DOWN candidate confirmed=$depthConfirmCount/$DEPTH_CONFIRM_FRAMES")
+
+        if (depthConfirmCount < DEPTH_CONFIRM_FRAMES) return false
+
+        depthConfirmCount = 0
+        Log.i(TAG, "*** STAIRS_DOWN ALERT *** jump=%.3f plateaus=$plateauCount [${lastDepthAnalysisMs}ms]"
+            .format(lastDepthJump))
+        return true
+    }
+
+    /**
+     * Count the number of distinct depth plateaus in [profile].
+     * A plateau is [DEPTH_PLATEAU_MIN_LEN] or more consecutive rows where
+     * values stay within [DEPTH_PLATEAU_DELTA] of the plateau's starting value.
+     * Two adjacent plateaus must differ by at least [DEPTH_PLATEAU_DELTA].
+     */
+    private fun countPlateaus(profile: FloatArray, len: Int): Int {
+        var plateaus = 0
+        var lastPlateauAvg = -1f
+        var i = 0
+
+        while (i < len) {
+            val start = i
+            val anchor = profile[i]
+            // Extend plateau while values stay near anchor
+            while (i < len && Math.abs(profile[i] - anchor) < DEPTH_PLATEAU_DELTA) {
+                i++
+            }
+            val plateauLen = i - start
+            if (plateauLen >= DEPTH_PLATEAU_MIN_LEN) {
+                val avg = profile.sliceArray(start until i).average().toFloat()
+                // Only count if distinct from previous plateau
+                if (lastPlateauAvg < 0f || Math.abs(avg - lastPlateauAvg) >= DEPTH_PLATEAU_DELTA) {
+                    plateaus++
+                    lastPlateauAvg = avg
+                }
+            }
+            // Skip non-plateau rows
+            if (i == start) i++
+        }
+        return plateaus
+    }
+
+    private fun getOrCreateDepthProfile(len: Int): FloatArray {
+        return depthProfileBuf?.takeIf { it.size >= len }
+            ?: FloatArray(len).also { depthProfileBuf = it }
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────

@@ -100,17 +100,17 @@ class AlertRuleEngineTest {
     @Test
     fun `rule2 - alert allowed after cooldown expires`() {
         val objs = listOf(DetectedObject("person", 100f))
-        repeat(3) { engine.onFrame(objs, fakeNowMs); fakeNowMs += 100 }
-
+        // Warm up 2 frames (count=2, not yet at threshold of 3)
+        repeat(2) { engine.onFrame(objs, fakeNowMs); fakeNowMs += 100 }
+        // 3rd frame fires the first alert
         val firstAlert = engine.onFrame(objs, fakeNowMs)
         assertNotNull(firstAlert)
 
-        // Advance time past 3-second cooldown, re-accumulate frames
+        // Advance time past 3-second cooldown and re-accumulate frames from scratch
         fakeNowMs += AlertRuleEngine.ALERT_COOLDOWN_MS + 1_000L
         engine.reset()
-        repeat(3) { engine.onFrame(objs, fakeNowMs); fakeNowMs += 100 }
-        // Manually restore last alert time to simulate cooldown expiry
-        // (reset() cleared it, so next frame should pass straight through)
+        repeat(2) { engine.onFrame(objs, fakeNowMs); fakeNowMs += 100 }
+        // 3rd frame after cooldown should fire again (reset() cleared cooldown too)
         val afterCooldown = engine.onFrame(objs, fakeNowMs)
         assertNotNull("Alert should fire after cooldown", afterCooldown)
     }
@@ -130,12 +130,13 @@ class AlertRuleEngineTest {
         val personObj = listOf(DetectedObject("person", 100f))
         val carObj    = listOf(DetectedObject("car",    200f))
 
-        repeat(3) { engine.onFrame(personObj, fakeNowMs); fakeNowMs += 100 }
-        // person fires
-        engine.onFrame(personObj, fakeNowMs)
+        // Warm up 2 frames then fire person alert on 3rd
+        repeat(2) { engine.onFrame(personObj, fakeNowMs); fakeNowMs += 100 }
+        val personAlert = engine.onFrame(personObj, fakeNowMs)
+        assertNotNull(personAlert)
 
-        // car starts fresh and should be able to fire independently
-        repeat(3) { engine.onFrame(carObj, fakeNowMs); fakeNowMs += 50 }
+        // Car starts fresh — warm up 2 frames then fire on 3rd
+        repeat(2) { engine.onFrame(carObj, fakeNowMs); fakeNowMs += 50 }
         val carAlert = engine.onFrame(carObj, fakeNowMs)
         assertNotNull("Car alert should fire independently of person cooldown", carAlert)
     }
@@ -179,41 +180,54 @@ class AlertRuleEngineTest {
         assertEquals(0, pattern.amplitudes[4])
     }
 
-    // ─── Rule #4: priority classification ─────────────────────────────────
+    // ─── Rule #4: priority classification (canonical tier names) ───────────
+    // The canonical 4-tier system is: DANGER > HAZARD > PERSON_VEH > OTHER
+    // Legacy aliases (CRITICAL=PERSON_VEH, HIGH=HAZARD, MEDIUM=OTHER, LOW=OTHER)
+    // are kept only for backward-compat; all new code should use canonical names.
 
     @Test
-    fun `rule4 - person is CRITICAL priority`() {
-        assertEquals(AlertPriority.CRITICAL, AlertPriority.forObject("person"))
+    fun `rule4 - person maps to PERSON_VEH priority`() {
+        assertEquals(AlertPriority.PERSON_VEH, AlertPriority.forObject("person"))
     }
 
     @Test
-    fun `rule4 - car is CRITICAL priority`() {
-        assertEquals(AlertPriority.CRITICAL, AlertPriority.forObject("car"))
+    fun `rule4 - car maps to PERSON_VEH priority`() {
+        assertEquals(AlertPriority.PERSON_VEH, AlertPriority.forObject("car"))
     }
 
     @Test
-    fun `rule4 - stray dog is CRITICAL priority`() {
-        assertEquals(AlertPriority.CRITICAL, AlertPriority.forObject("dog"))
+    fun `rule4 - stray dog maps to PERSON_VEH priority`() {
+        assertEquals(AlertPriority.PERSON_VEH, AlertPriority.forObject("dog"))
     }
 
     @Test
-    fun `rule4 - motorcycle is CRITICAL priority`() {
-        assertEquals(AlertPriority.CRITICAL, AlertPriority.forObject("motorcycle"))
+    fun `rule4 - motorcycle maps to PERSON_VEH priority`() {
+        assertEquals(AlertPriority.PERSON_VEH, AlertPriority.forObject("motorcycle"))
     }
 
     @Test
-    fun `rule4 - stairs is HIGH priority`() {
-        assertEquals(AlertPriority.HIGH, AlertPriority.forObject("stairs"))
+    fun `rule4 - stairs maps to HAZARD priority`() {
+        assertEquals(AlertPriority.HAZARD, AlertPriority.forObject("stairs"))
     }
 
     @Test
-    fun `rule4 - chair is MEDIUM priority`() {
-        assertEquals(AlertPriority.MEDIUM, AlertPriority.forObject("chair"))
+    fun `rule4 - pothole maps to HAZARD priority`() {
+        assertEquals(AlertPriority.HAZARD, AlertPriority.forObject("pothole"))
     }
 
     @Test
-    fun `rule4 - unknown object is LOW priority`() {
-        assertEquals(AlertPriority.LOW, AlertPriority.forObject("unknown_thing_xyz"))
+    fun `rule4 - door maps to HAZARD priority`() {
+        assertEquals(AlertPriority.HAZARD, AlertPriority.forObject("door"))
+    }
+
+    @Test
+    fun `rule4 - chair maps to OTHER priority`() {
+        assertEquals(AlertPriority.OTHER, AlertPriority.forObject("chair"))
+    }
+
+    @Test
+    fun `rule4 - unknown object maps to OTHER priority`() {
+        assertEquals(AlertPriority.OTHER, AlertPriority.forObject("unknown_thing_xyz"))
     }
 
     @Test
@@ -223,19 +237,69 @@ class AlertRuleEngineTest {
     }
 
     @Test
-    fun `rule4 - CRITICAL object fires before MEDIUM when both are in same frame`() {
-        // Warm up both objects to satisfy Rule #1
+    fun `rule4 - isDanger flag promotes object to DANGER tier`() {
+        // DANGER is assigned dynamically by ApproachTracker, not by forObject()
+        val dangerObj = DetectedObject("chair", 100f, isDanger = true)
+        assertEquals(AlertPriority.DANGER, dangerObj.priority)
+    }
+
+    @Test
+    fun `rule4 - DANGER has lower level number than HAZARD (higher urgency)`() {
+        assertTrue(AlertPriority.DANGER.level < AlertPriority.HAZARD.level)
+    }
+
+    @Test
+    fun `rule4 - HAZARD has lower level number than PERSON_VEH`() {
+        assertTrue(AlertPriority.HAZARD.level < AlertPriority.PERSON_VEH.level)
+    }
+
+    @Test
+    fun `rule4 - PERSON_VEH has lower level number than OTHER`() {
+        assertTrue(AlertPriority.PERSON_VEH.level < AlertPriority.OTHER.level)
+    }
+
+    @Test
+    fun `rule4 - legacy alias CRITICAL equals canonical PERSON_VEH`() {
+        assertSame(AlertPriority.PERSON_VEH, AlertPriority.CRITICAL)
+    }
+
+    @Test
+    fun `rule4 - legacy alias HIGH equals canonical HAZARD`() {
+        assertSame(AlertPriority.HAZARD, AlertPriority.HIGH)
+    }
+
+    @Test
+    fun `rule4 - legacy aliases MEDIUM and LOW both equal canonical OTHER`() {
+        assertSame(AlertPriority.OTHER, AlertPriority.MEDIUM)
+        assertSame(AlertPriority.OTHER, AlertPriority.LOW)
+    }
+
+    @Test
+    fun `rule4 - chair is OTHER in AlertPriority but HAZARD in LabelMapper (intentional)`() {
+        // AlertPriority.forObject("chair") returns OTHER because chair is a generic obstacle.
+        // LabelMapper.isHazard("chair") returns true because it needs an earlier detection
+        // threshold (THRESHOLD_LOW) and is considered a trip hazard at close range.
+        // These two classifications serve different purposes and are intentionally different.
+        assertEquals(AlertPriority.OTHER, AlertPriority.forObject("chair"))
+        assertTrue(com.google.mediapipe.examples.objectdetection.LabelMapper.isHazard("chair"))
+    }
+
+    @Test
+    fun `rule4 - PERSON_VEH object fires before OTHER when both are in same frame`() {
+        // Warm up both objects to satisfy Rule #1 (need 3 consecutive frames)
         val personObj = DetectedObject("person", 300f)
         val chairObj  = DetectedObject("chair",  100f)  // chair is closer but lower priority
 
-        repeat(3) {
+        // 2 warm-up frames (count reaches 2, below threshold of 3)
+        repeat(2) {
             engine.onFrame(listOf(personObj, chairObj), fakeNowMs)
             fakeNowMs += 100
         }
+        // 3rd frame fires the alert — person (PERSON_VEH, level=2) beats chair (OTHER, level=3)
         val alert = engine.onFrame(listOf(personObj, chairObj), fakeNowMs)
         assertNotNull(alert)
         assertEquals(
-            "CRITICAL 'person' should win over MEDIUM 'chair' despite being farther",
+            "PERSON_VEH 'person' should win over OTHER 'chair' despite being farther",
             "person",
             alert!!.obj.label
         )
@@ -243,21 +307,20 @@ class AlertRuleEngineTest {
 
     @Test
     fun `rule4 - among same priority, nearer object fires first`() {
-        val nearCar = DetectedObject("car", 50f)
-        val farCar  = DetectedObject("car", 400f)
-
-        // Use different labels to avoid frame-count collision
+        // car (50 cm) and truck (400 cm) are both PERSON_VEH priority
         val car1 = DetectedObject("car",   50f)
         val car2 = DetectedObject("truck", 400f)
 
-        repeat(3) {
+        // 2 warm-up frames, then 3rd fires the alert
+        repeat(2) {
             engine.onFrame(listOf(car1, car2), fakeNowMs)
             fakeNowMs += 100
         }
         val alert = engine.onFrame(listOf(car1, car2), fakeNowMs)
         assertNotNull(alert)
+        // Both PERSON_VEH — tiebreak by distanceCm ascending → car (50 cm) wins
         assertTrue(
-            "Nearest CRITICAL object should fire first",
+            "Nearest PERSON_VEH object should fire first",
             alert!!.obj.distanceCm <= 100f
         )
     }

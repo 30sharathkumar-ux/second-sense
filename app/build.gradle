@@ -59,6 +59,13 @@ android {
         noCompress 'tflite'
     }
 
+    testOptions {
+        unitTests {
+            returnDefaultValues = true
+            includeAndroidResources = false
+        }
+    }
+
 }
 
 // import DownloadModels task
@@ -119,4 +126,9 @@ dependencies {
     androidTestImplementation "androidx.test.espresso:espresso-core:3.4.0"
 
     implementation 'com.google.mediapipe:tasks-vision:1.0.0'
+
+    // Step 2: Standalone TFLite for DepthEstimator (MiDaS Small).
+    implementation 'org.tensorflow:tensorflow-lite:2.14.0'
+    implementation 'org.tensorflow:tensorflow-lite-gpu:2.14.0'
+    implementation 'org.tensorflow:tensorflow-lite-gpu-api:2.14.0'
 }
