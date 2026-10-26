@@ -100,18 +100,21 @@ class AlertRuleEngineTest {
     @Test
     fun `rule2 - alert allowed after cooldown expires`() {
         val objs = listOf(DetectedObject("person", 100f))
-        repeat(3) { engine.onFrame(objs, fakeNowMs); fakeNowMs += 100 }
-
-        val firstAlert = engine.onFrame(objs, fakeNowMs)
+        var firstAlert: AlertCandidate? = null
+        repeat(3) {
+            firstAlert = engine.onFrame(objs, fakeNowMs)
+            fakeNowMs += 100
+        }
         assertNotNull(firstAlert)
 
         // Advance time past 3-second cooldown, re-accumulate frames
         fakeNowMs += AlertRuleEngine.ALERT_COOLDOWN_MS + 1_000L
         engine.reset()
-        repeat(3) { engine.onFrame(objs, fakeNowMs); fakeNowMs += 100 }
-        // Manually restore last alert time to simulate cooldown expiry
-        // (reset() cleared it, so next frame should pass straight through)
-        val afterCooldown = engine.onFrame(objs, fakeNowMs)
+        var afterCooldown: AlertCandidate? = null
+        repeat(3) {
+            afterCooldown = engine.onFrame(objs, fakeNowMs)
+            fakeNowMs += 100
+        }
         assertNotNull("Alert should fire after cooldown", afterCooldown)
     }
 
@@ -119,8 +122,6 @@ class AlertRuleEngineTest {
     fun `rule2 - cooldownRemainingMs is positive right after alert`() {
         val objs = listOf(DetectedObject("dog", 50f))
         repeat(3) { engine.onFrame(objs, fakeNowMs); fakeNowMs += 100 }
-        // Alert fires here
-        engine.onFrame(objs, fakeNowMs)
         val remaining = engine.cooldownRemainingMs("dog", fakeNowMs)
         assertTrue("Cooldown should be positive right after alert", remaining > 0L)
     }
@@ -131,12 +132,14 @@ class AlertRuleEngineTest {
         val carObj    = listOf(DetectedObject("car",    200f))
 
         repeat(3) { engine.onFrame(personObj, fakeNowMs); fakeNowMs += 100 }
-        // person fires
-        engine.onFrame(personObj, fakeNowMs)
+        // person fires on frame 3
 
-        // car starts fresh and should be able to fire independently
-        repeat(3) { engine.onFrame(carObj, fakeNowMs); fakeNowMs += 50 }
-        val carAlert = engine.onFrame(carObj, fakeNowMs)
+        // car starts fresh and should be able to fire independently on frame 3
+        var carAlert: AlertCandidate? = null
+        repeat(3) {
+            carAlert = engine.onFrame(carObj, fakeNowMs)
+            fakeNowMs += 50
+        }
         assertNotNull("Car alert should fire independently of person cooldown", carAlert)
     }
 
@@ -224,15 +227,14 @@ class AlertRuleEngineTest {
 
     @Test
     fun `rule4 - CRITICAL object fires before MEDIUM when both are in same frame`() {
-        // Warm up both objects to satisfy Rule #1
         val personObj = DetectedObject("person", 300f)
         val chairObj  = DetectedObject("chair",  100f)  // chair is closer but lower priority
 
+        var alert: AlertCandidate? = null
         repeat(3) {
-            engine.onFrame(listOf(personObj, chairObj), fakeNowMs)
+            alert = engine.onFrame(listOf(personObj, chairObj), fakeNowMs)
             fakeNowMs += 100
         }
-        val alert = engine.onFrame(listOf(personObj, chairObj), fakeNowMs)
         assertNotNull(alert)
         assertEquals(
             "CRITICAL 'person' should win over MEDIUM 'chair' despite being farther",
@@ -243,18 +245,15 @@ class AlertRuleEngineTest {
 
     @Test
     fun `rule4 - among same priority, nearer object fires first`() {
-        val nearCar = DetectedObject("car", 50f)
-        val farCar  = DetectedObject("car", 400f)
-
         // Use different labels to avoid frame-count collision
         val car1 = DetectedObject("car",   50f)
         val car2 = DetectedObject("truck", 400f)
 
+        var alert: AlertCandidate? = null
         repeat(3) {
-            engine.onFrame(listOf(car1, car2), fakeNowMs)
+            alert = engine.onFrame(listOf(car1, car2), fakeNowMs)
             fakeNowMs += 100
         }
-        val alert = engine.onFrame(listOf(car1, car2), fakeNowMs)
         assertNotNull(alert)
         assertTrue(
             "Nearest CRITICAL object should fire first",

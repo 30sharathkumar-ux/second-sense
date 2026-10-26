@@ -59,6 +59,9 @@ android {
         noCompress 'tflite'
     }
 
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
 }
 
 // import DownloadModels task
