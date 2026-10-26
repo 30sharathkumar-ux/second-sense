@@ -21,12 +21,18 @@ class MainActivity : AppCompatActivity(), AlertManager.AlertEventListener {
     private var currentStrength: Int = 255
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
+    // ── Rule test state ──────────────────────────────────────────────────
+    /** Current object label in the Rules Test panel. */
+    private var ruleTestLabel: String = "person"
+    /** Current simulated distance (cm) in the Rules Test panel. */
+    private var ruleTestDistanceCm: Float = 80f
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Initialize AlertManager with a callback for TTS engine readiness
+        // Initialize AlertManager with TTS-ready callback
         alertManager = AlertManager(this) { isSuccess ->
             runOnUiThread {
                 if (isSuccess) {
@@ -46,77 +52,160 @@ class MainActivity : AppCompatActivity(), AlertManager.AlertEventListener {
         setupHardwareDiagnostics()
         setupSpeechControls()
         setupVibrationControls()
+        setupRulesTestPanel()
         setupLogControls()
     }
 
-    private fun setupHardwareDiagnostics() {
-        val hasVibrator = alertManager.hasVibrator()
-        val hasAmpControl = alertManager.hasAmplitudeControl()
+    // ── Hardware Diagnostics ─────────────────────────────────────────────
 
+    private fun setupHardwareDiagnostics() {
         binding.tvHardwareSupport.text = when {
-            !hasVibrator -> "Vibrator: None"
-            hasAmpControl -> "Vibrator: Full Amplitude Support"
-            else -> "Vibrator: Basic Support"
+            !alertManager.hasVibrator()       -> "Vibrator: None"
+            alertManager.hasAmplitudeControl() -> "Vibrator: Full Amplitude Support"
+            else                               -> "Vibrator: Basic Support"
         }
     }
 
-    private fun setupSpeechControls() {
-        // Quick phrase chips
-        binding.chipObstacle.setOnClickListener {
-            binding.etSpeakText.setText("Warning! Obstacle detected 50 centimeters ahead.")
-        }
+    // ── Speech Controls ──────────────────────────────────────────────────
 
+    private fun setupSpeechControls() {
+        binding.chipObstacle.setOnClickListener {
+            binding.etSpeakText.setText("Warning! Obstacle detected 50 centimetres ahead.")
+        }
         binding.chipTurn.setOnClickListener {
             binding.etSpeakText.setText("Clear path detected on the left. Turn left.")
         }
-
         binding.chipBattery.setOnClickListener {
             binding.etSpeakText.setText("Alert! Device battery level is below 15 percent.")
         }
 
-        // Requirement: "Speak" button
         binding.btnSpeak.setOnClickListener {
-            val textToSpeak = binding.etSpeakText.text?.toString()?.trim()
-            if (textToSpeak.isNullOrEmpty()) {
-                Toast.makeText(this, "Please enter speech text to test speak()", Toast.LENGTH_SHORT).show()
+            val text = binding.etSpeakText.text?.toString()?.trim()
+            if (text.isNullOrEmpty()) {
+                Toast.makeText(this, "Please enter speech text", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-
-            // Call AlertManager function
-            alertManager.speak(textToSpeak)
+            alertManager.speak(text)
             triggerPulseAnimation(getColor(R.color.primary))
         }
     }
 
+    // ── Vibration Controls ───────────────────────────────────────────────
+
     @SuppressLint("SetTextI18n")
     private fun setupVibrationControls() {
-        // Strength slider listener
         binding.sliderStrength.addOnChangeListener { _, value, _ ->
             currentStrength = value.toInt()
-            val percentage = ((currentStrength / 255f) * 100).toInt()
-            binding.tvStrengthLabel.text = "Vibration Strength: $currentStrength / 255 ($percentage%)"
+            val pct = ((currentStrength / 255f) * 100).toInt()
+            binding.tvStrengthLabel.text = "Vibration Strength: $currentStrength / 255 ($pct%)"
         }
 
-        // Preset strength buttons
-        binding.btnPresetLow.setOnClickListener {
-            binding.sliderStrength.value = 64f
-        }
+        binding.btnPresetLow.setOnClickListener { binding.sliderStrength.value = 64f }
+        binding.btnPresetMed.setOnClickListener { binding.sliderStrength.value = 160f }
+        binding.btnPresetMax.setOnClickListener { binding.sliderStrength.value = 255f }
 
-        binding.btnPresetMed.setOnClickListener {
-            binding.sliderStrength.value = 160f
-        }
-
-        binding.btnPresetMax.setOnClickListener {
-            binding.sliderStrength.value = 255f
-        }
-
-        // Requirement: "Vibrate" button
         binding.btnVibrate.setOnClickListener {
-            // Call AlertManager function
             alertManager.vibrate(currentStrength)
             triggerPulseAnimation(getColor(R.color.vibrate_accent))
         }
     }
+
+    // ── Rules Test Panel ─────────────────────────────────────────────────
+
+    private fun setupRulesTestPanel() {
+        // Quick object presets (Rule #4 — priority examples)
+        binding.chipPerson.setOnClickListener {
+            binding.etObjectLabel.setText("person")
+            binding.etDistance.setText("80")
+        }
+        binding.chipCar.setOnClickListener {
+            binding.etObjectLabel.setText("car")
+            binding.etDistance.setText("200")
+        }
+        binding.chipDog.setOnClickListener {
+            binding.etObjectLabel.setText("dog")
+            binding.etDistance.setText("120")
+        }
+        binding.chipChair.setOnClickListener {
+            binding.etObjectLabel.setText("chair")
+            binding.etDistance.setText("60")
+        }
+
+        // Simulate one detection frame through the rule engine
+        binding.btnSimulateFrame.setOnClickListener {
+            ruleTestLabel    = binding.etObjectLabel.text?.toString()?.trim() ?: "object"
+            ruleTestDistanceCm = binding.etDistance.text?.toString()?.toFloatOrNull() ?: 80f
+
+            if (ruleTestLabel.isEmpty()) {
+                Toast.makeText(this, "Enter an object label to simulate", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            val detected = DetectedObject(
+                label       = ruleTestLabel,
+                distanceCm  = ruleTestDistanceCm,
+                confidence  = 0.95f
+            )
+
+            // Feed single detection frame through all 4 rules
+            alertManager.processFrame(listOf(detected))
+
+            // Refresh live status badges after processing
+            refreshRuleStatusBadges(ruleTestLabel)
+        }
+
+        // Reset the rule engine state (counters + cooldowns)
+        binding.btnResetRules.setOnClickListener {
+            alertManager.ruleEngine.reset()
+            refreshRuleStatusBadges(ruleTestLabel)
+            appendLog("Rule engine reset. Frame counters and cooldowns cleared.")
+            Toast.makeText(this, "Rule engine reset", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * Refreshes the live frame-count, cooldown, and priority badges for [label].
+     */
+    @SuppressLint("SetTextI18n")
+    private fun refreshRuleStatusBadges(label: String) {
+        val engine   = alertManager.ruleEngine
+        val frames   = engine.frameCount(label)
+        val cooldown = engine.cooldownRemainingMs(label)
+        val priority = AlertPriority.forObject(label)
+
+        // Rule #1 badge
+        binding.tvFrameCounter.text = "Frames: $frames / ${AlertRuleEngine.REQUIRED_CONSECUTIVE_FRAMES}"
+        binding.tvFrameCounter.setTextColor(
+            if (frames >= AlertRuleEngine.REQUIRED_CONSECUTIVE_FRAMES)
+                getColor(R.color.accent)
+            else
+                getColor(R.color.text_primary)
+        )
+
+        // Rule #2 badge
+        binding.tvCooldownStatus.text = if (cooldown > 0L) {
+            "Cooldown: ${cooldown / 1000.0f}s"
+        } else {
+            "Cooldown: —"
+        }
+
+        // Rule #4 priority badge
+        binding.tvPriorityBadge.text = priority.label
+        binding.tvPriorityBadge.setBackgroundColor(
+            when (priority) {
+                AlertPriority.CRITICAL -> Color.parseColor("#C62828")
+                AlertPriority.HIGH     -> Color.parseColor("#E65100")
+                AlertPriority.MEDIUM   -> Color.parseColor("#F57F17")
+                AlertPriority.LOW      -> getColor(R.color.status_badge_bg)
+            }
+        )
+        binding.tvPriorityBadge.setTextColor(
+            if (priority == AlertPriority.LOW) getColor(R.color.status_badge_text)
+            else Color.WHITE
+        )
+    }
+
+    // ── Log Controls ─────────────────────────────────────────────────────
 
     private fun setupLogControls() {
         binding.btnClearLog.setOnClickListener {
@@ -125,53 +214,75 @@ class MainActivity : AppCompatActivity(), AlertManager.AlertEventListener {
     }
 
     private fun appendLog(message: String) {
-        val timestamp = timeFormat.format(Date())
-        val newEntry = "[$timestamp] $message\n"
-        binding.tvConsoleLog.append(newEntry)
+        val ts  = timeFormat.format(Date())
+        binding.tvConsoleLog.append("[$ts] $message\n")
     }
+
+    // ── Pulse animation ───────────────────────────────────────────────────
 
     private fun triggerPulseAnimation(colorTint: Int) {
         binding.pulseIndicator.setBackgroundColor(colorTint)
-
-        val scaleX = ObjectAnimator.ofFloat(binding.pulseIndicator, View.SCALE_X, 1f, 1.8f, 1f)
-        val scaleY = ObjectAnimator.ofFloat(binding.pulseIndicator, View.SCALE_Y, 1f, 1.8f, 1f)
-        val alpha = ObjectAnimator.ofFloat(binding.pulseIndicator, View.ALPHA, 1f, 0.4f, 1f)
-
         AnimatorSet().apply {
-            playTogether(scaleX, scaleY, alpha)
+            playTogether(
+                ObjectAnimator.ofFloat(binding.pulseIndicator, View.SCALE_X, 1f, 1.8f, 1f),
+                ObjectAnimator.ofFloat(binding.pulseIndicator, View.SCALE_Y, 1f, 1.8f, 1f),
+                ObjectAnimator.ofFloat(binding.pulseIndicator, View.ALPHA,   1f, 0.4f, 1f)
+            )
             duration = 350
             start()
         }
     }
 
-    // AlertEventListener callbacks
-    override fun onSpeechStarted(text: String) {
-        runOnUiThread {
-            appendLog("SPEAK: \"$text\"")
-        }
+    // ── AlertEventListener ────────────────────────────────────────────────
+
+    override fun onSpeechStarted(text: String) = runOnUiThread {
+        appendLog("SPEAK: \"${text.take(60)}\"")
     }
 
-    override fun onSpeechCompleted(text: String) {
-        runOnUiThread {
-            appendLog("SPEAK COMPLETED: Utterance finished")
-        }
+    override fun onSpeechCompleted(text: String) = runOnUiThread {
+        appendLog("SPEAK DONE: utterance finished")
     }
 
-    override fun onSpeechError(text: String, errorMessage: String) {
-        runOnUiThread {
-            appendLog("ERROR: $errorMessage (Text: $text)")
-        }
+    override fun onSpeechError(text: String, errorMessage: String) = runOnUiThread {
+        appendLog("ERROR: $errorMessage")
     }
 
-    override fun onVibrated(strength: Int, amplitude: Int, durationMs: Long) {
+    override fun onVibrated(strength: Int, amplitude: Int, durationMs: Long) = runOnUiThread {
+        appendLog("VIBRATE: amp=$amplitude duration=${durationMs}ms")
+        triggerPulseAnimation(getColor(R.color.vibrate_accent))
+    }
+
+    /**
+     * Called by AlertManager after each [processFrame] call.
+     *
+     * Displays whether the alert fired or which rule blocked it.
+     */
+    override fun onFrameProcessed(candidate: AlertCandidate?, blockedReason: String?) {
         runOnUiThread {
-            appendLog("VIBRATE: strength=$strength (amp=$amplitude, ${durationMs}ms)")
+            if (candidate != null) {
+                val obj = candidate.obj
+                appendLog(
+                    "✅ ALERT FIRED — ${obj.label} | priority=${obj.priority.label} " +
+                    "| dist=${obj.distanceCm}cm | text=\"${obj.toAlertText()}\""
+                )
+                triggerPulseAnimation(
+                    when (obj.priority) {
+                        AlertPriority.CRITICAL -> Color.parseColor("#C62828")
+                        AlertPriority.HIGH     -> Color.parseColor("#E65100")
+                        AlertPriority.MEDIUM   -> Color.parseColor("#F57F17")
+                        AlertPriority.LOW      -> getColor(R.color.primary)
+                    }
+                )
+            } else {
+                appendLog("⛔ BLOCKED — $blockedReason")
+            }
+            // Refresh badges to reflect latest state
+            refreshRuleStatusBadges(ruleTestLabel)
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // Clean up TextToSpeech and Vibrator resources
         alertManager.shutdown()
     }
 }
