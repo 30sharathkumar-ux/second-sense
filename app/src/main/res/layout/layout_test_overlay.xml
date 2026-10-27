@@ -74,6 +74,39 @@
             android:textSize="14sp"
             app:backgroundTint="#1565C0" />
 
+        <!-- navigation-v6: Simulate NAV blocked center, left clear -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_test_nav_left"
+            android:layout_width="240dp"
+            android:layout_height="48dp"
+            android:layout_marginBottom="8dp"
+            android:text="NAV: Block C → Go Left"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
+            app:backgroundTint="#2E7D32" />
+
+        <!-- navigation-v6: Simulate NAV blocked center, right clear -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_test_nav_right"
+            android:layout_width="240dp"
+            android:layout_height="48dp"
+            android:layout_marginBottom="8dp"
+            android:text="NAV: Block C → Go Right"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
+            app:backgroundTint="#1B5E20" />
+
+        <!-- navigation-v6: Simulate NAV all blocked -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_test_nav_stop"
+            android:layout_width="240dp"
+            android:layout_height="48dp"
+            android:layout_marginBottom="20dp"
+            android:text="NAV: All Blocked → STOP"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
+            app:backgroundTint="#B71C1C" />
+
         <!-- Close -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btn_test_close"

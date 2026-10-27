@@ -198,6 +198,53 @@ object Messages {
         Language.KANNADA -> "${dirKn(direction)} ಬಾಗಿಲು ಇದೆ"
     }
 
+    // ── navigation-v6: Walking-direction guidance ────────────────────────────
+
+    fun navGoStraight(lang: Language): String = when (lang) {
+        Language.ENGLISH -> "Go straight"
+        Language.HINDI   -> "सीधे जाएं"
+        Language.KANNADA -> "ನೇರವಾಗಿ ಹೋಗಿ"
+    }
+
+    fun navMoveLeft(lang: Language): String = when (lang) {
+        Language.ENGLISH -> "Move slightly left"
+        Language.HINDI   -> "थोड़ा बाईं ओर जाएं"
+        Language.KANNADA -> "ಸ್ವಲ್ಪ ಎಡಕ್ಕೆ ಹೋಗಿ"
+    }
+
+    fun navMoveFarLeft(lang: Language): String = when (lang) {
+        Language.ENGLISH -> "Move left"
+        Language.HINDI   -> "बाईं ओर जाएं"
+        Language.KANNADA -> "ಎಡಕ್ಕೆ ಹೋಗಿ"
+    }
+
+    fun navMoveRight(lang: Language): String = when (lang) {
+        Language.ENGLISH -> "Move slightly right"
+        Language.HINDI   -> "थोड़ा दाईं ओर जाएं"
+        Language.KANNADA -> "ಸ್ವಲ್ಪ ಬಲಕ್ಕೆ ಹೋಗಿ"
+    }
+
+    fun navMoveFarRight(lang: Language): String = when (lang) {
+        Language.ENGLISH -> "Move right"
+        Language.HINDI   -> "दाईं ओर जाएं"
+        Language.KANNADA -> "ಬಲಕ್ಕೆ ಹೋಗಿ"
+    }
+
+    fun navStop(lang: Language): String = when (lang) {
+        Language.ENGLISH -> "Stop, path blocked"
+        Language.HINDI   -> "रुकें, रास्ता बंद है"
+        Language.KANNADA -> "ನಿಲ್ಲಿ, ದಾರಿ ಮುಚ್ಚಿದೆ"
+    }
+
+    fun navCommand(lang: Language, cmd: NavigationEngine.Command): String = when (cmd) {
+        NavigationEngine.Command.GO_STRAIGHT   -> navGoStraight(lang)
+        NavigationEngine.Command.MOVE_LEFT     -> navMoveLeft(lang)
+        NavigationEngine.Command.MOVE_FAR_LEFT -> navMoveFarLeft(lang)
+        NavigationEngine.Command.MOVE_RIGHT    -> navMoveRight(lang)
+        NavigationEngine.Command.MOVE_FAR_RIGHT-> navMoveFarRight(lang)
+        NavigationEngine.Command.STOP          -> navStop(lang)
+    }
+
     // ── Battery alerts ───────────────────────────────────────────────────────
 
     fun battery30(lang: Language): String = when (lang) {

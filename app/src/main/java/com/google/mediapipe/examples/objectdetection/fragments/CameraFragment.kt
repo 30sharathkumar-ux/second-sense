@@ -50,6 +50,7 @@ import com.google.mediapipe.examples.objectdetection.ObjectDetectorHelper
 import com.google.mediapipe.examples.objectdetection.R
 import com.google.mediapipe.examples.objectdetection.DepthEstimator
 import com.google.mediapipe.examples.objectdetection.LabelMapper
+import com.google.mediapipe.examples.objectdetection.NavigationEngine
 import com.google.mediapipe.examples.objectdetection.StairsClassifier
 import com.google.mediapipe.examples.objectdetection.StairsDetector
 import com.google.mediapipe.examples.objectdetection.WallDetector
@@ -94,6 +95,17 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
 
     /** stairs-v5 Phase 3: TFLite classifier (stairs_up / stairs_down / none). */
     private lateinit var stairsClassifier: StairsClassifier
+
+    /** navigation-v6 Phase 1: Free-space direction engine. */
+    private val navEngine = NavigationEngine()
+
+    /**
+     * navigation-v6: Detection boxes (normalised [L,T,R,B]) from the last onResults() call.
+     * Written on the main thread, read on backgroundExecutor — @Volatile is sufficient
+     * because we only need best-effort coherence per frame.
+     */
+    @Volatile
+    private var lastNavDetectionBoxes: List<FloatArray> = emptyList()
 
     /** Step 2: MiDaS depth estimator — class-independent obstacle detection. */
     private lateinit var depthEstimator: DepthEstimator
@@ -287,6 +299,8 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
             // Reset voice alert cooldown and last message on toggle
             lastVoiceAlertTimestamp = 0L
             lastSpokenAlertMessage = ""
+            // navigation-v6: reset engine state on scan stop
+            if (!isScanningActive) navEngine.reset()
 
             if (isScanningActive) {
                 // Announce start via TTS and double tactile blip
@@ -407,6 +421,42 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
             audioHapticManager.speak(announcement, isUrgent = true)
             fragmentCameraBinding.tvDetectionFeedback.text = announcement
             Log.i(TAG, "TEST: Language cycled to $lang")
+        }
+
+        // navigation-v6: simulate buttons
+        val btnNavLeft  = requireView().findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_test_nav_left)
+        val btnNavRight = requireView().findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_test_nav_right)
+        val btnNavStop  = requireView().findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_test_nav_stop)
+
+        btnNavLeft?.setOnClickListener {
+            val lang   = (activity as? MainActivity)?.activeLanguage ?: Messages.Language.ENGLISH
+            val result = navEngine.simulate(NavigationEngine.Command.MOVE_LEFT)
+            val msg    = Messages.navCommand(lang, result.command)
+            fragmentCameraBinding.tvDetectionFeedback.text = msg
+            audioHapticManager.speak(msg, isUrgent = false)
+            Log.i(TAG, "TEST: NAV simulate MOVE_LEFT")
+            hideTestMode()
+        }
+
+        btnNavRight?.setOnClickListener {
+            val lang   = (activity as? MainActivity)?.activeLanguage ?: Messages.Language.ENGLISH
+            val result = navEngine.simulate(NavigationEngine.Command.MOVE_RIGHT)
+            val msg    = Messages.navCommand(lang, result.command)
+            fragmentCameraBinding.tvDetectionFeedback.text = msg
+            audioHapticManager.speak(msg, isUrgent = false)
+            Log.i(TAG, "TEST: NAV simulate MOVE_RIGHT")
+            hideTestMode()
+        }
+
+        btnNavStop?.setOnClickListener {
+            val lang   = (activity as? MainActivity)?.activeLanguage ?: Messages.Language.ENGLISH
+            val result = navEngine.simulate(NavigationEngine.Command.STOP)
+            val msg    = Messages.navCommand(lang, result.command)
+            fragmentCameraBinding.tvDetectionFeedback.text = msg
+            audioHapticManager.speak(msg, isUrgent = true)
+            audioHapticManager.vibrateHazard()
+            Log.i(TAG, "TEST: NAV simulate STOP")
+            hideTestMode()
         }
 
         btnClose?.setOnClickListener { hideTestMode() }
@@ -604,6 +654,40 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
                 audioHapticManager.speak(msg, isUrgent = false)
                 audioHapticManager.vibrateHazard()
             }
+
+            // navigation-v6 Phase 1: direction engine on last depth map + cached detection boxes.
+            val navDepthMap = depthEstimator.lastDepthMap
+            if (navDepthMap != null) {
+                val navResult = navEngine.analyze(
+                    depthMap    = navDepthMap,
+                    mapSize     = DepthEstimator.MODEL_SIZE,
+                    maxDepthVal = depthEstimator.lastDepthMaxVal,
+                    detections  = lastNavDetectionBoxes,
+                    nowMs       = System.currentTimeMillis()
+                )
+                if (navResult.shouldSpeak) {
+                    val lang = (activity as? MainActivity)?.activeLanguage ?: Messages.Language.ENGLISH
+                    val navMsg = Messages.navCommand(lang, navResult.command)
+                    Log.d("NAV", "SPEAK cmd=${navResult.command} reminder=${navResult.isReminder}: $navMsg")
+                    audioHapticManager.speak(navMsg, isUrgent = false)
+                    activity?.runOnUiThread {
+                        if (_fragmentCameraBinding != null && isScanningActive) {
+                            fragmentCameraBinding.tvDetectionFeedback.text = navMsg
+                        }
+                    }
+                }
+                if (isDebugOverlayVisible) {
+                    val z = navResult.zones
+                    val navDbg = "NAV FL=${f(z.farLeft)} L=${f(z.left)} C=${f(z.center)}" +
+                                 " R=${f(z.right)} FR=${f(z.farRight)} cmd=${navResult.command}"
+                    activity?.runOnUiThread {
+                        if (_fragmentCameraBinding != null) {
+                            val existing = fragmentCameraBinding.tvDebugLatency.text?.toString() ?: ""
+                            fragmentCameraBinding.tvDebugLatency.text = "$existing | $navDbg"
+                        }
+                    }
+                }
+            }
         }
 
         // Stairs-v4 Step 1: Run stairs-up edge detector on the same frame bitmap.
@@ -747,6 +831,17 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
                     resultBundle.inputImageWidth.toFloat()
                 } else {
                     resultBundle.inputImageHeight.toFloat()
+                }
+
+                // navigation-v6: cache normalised [L,T,R,B] boxes for the direction engine.
+                lastNavDetectionBoxes = detections.mapNotNull { det ->
+                    val b = det.boundingBox() ?: return@mapNotNull null
+                    floatArrayOf(
+                        b.left   / frameWidth,
+                        b.top    / frameHeight,
+                        b.right  / frameWidth,
+                        b.bottom / frameHeight
+                    )
                 }
 
                 // Step 3: Evaluate each detection for approaching-object danger.
