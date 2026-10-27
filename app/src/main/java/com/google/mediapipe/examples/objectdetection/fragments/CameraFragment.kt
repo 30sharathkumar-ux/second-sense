@@ -50,6 +50,7 @@ import com.google.mediapipe.examples.objectdetection.ObjectDetectorHelper
 import com.google.mediapipe.examples.objectdetection.R
 import com.google.mediapipe.examples.objectdetection.DepthEstimator
 import com.google.mediapipe.examples.objectdetection.LabelMapper
+import com.google.mediapipe.examples.objectdetection.StairsClassifier
 import com.google.mediapipe.examples.objectdetection.StairsDetector
 import com.google.mediapipe.examples.objectdetection.WallDetector
 import com.google.mediapipe.examples.objectdetection.databinding.FragmentCameraBinding
@@ -90,6 +91,9 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
 
     /** Stairs-v4 Step 1: Stairs-up detector (horizontal edge repetition) */
     private val stairsDetector = StairsDetector()
+
+    /** stairs-v5 Phase 3: TFLite classifier (stairs_up / stairs_down / none). */
+    private lateinit var stairsClassifier: StairsClassifier
 
     /** Step 2: MiDaS depth estimator — class-independent obstacle detection. */
     private lateinit var depthEstimator: DepthEstimator
@@ -166,6 +170,8 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
         }
         // Step 2: release depth estimator resources
         if (this::depthEstimator.isInitialized) depthEstimator.close()
+        // stairs-v5 Phase 3: release classifier
+        if (this::stairsClassifier.isInitialized) stairsClassifier.close()
         _fragmentCameraBinding = null
         super.onDestroyView()
 
@@ -199,6 +205,9 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
         // Step 2: Initialize depth estimator on the background thread (model load can be slow)
         depthEstimator = DepthEstimator(requireContext())
 
+        // stairs-v5 Phase 3: init classifier (must be same thread as classify() calls)
+        stairsClassifier = StairsClassifier(requireContext())
+
         // Initialize background executor
         backgroundExecutor = Executors.newSingleThreadExecutor()
 
@@ -217,6 +226,9 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
 
             // Step 2: init depth estimator on background thread (GPU delegate must be on same thread)
             depthEstimator.init()
+
+            // stairs-v5 Phase 3: init classifier on same background thread
+            stairsClassifier.init()
 
             fragmentCameraBinding.viewFinder.post {
                 setUpCamera()
@@ -637,6 +649,43 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
                 }
                 audioHapticManager.speak(msg, isUrgent = false)
                 audioHapticManager.vibrateHazard()
+            }
+        }
+
+        // stairs-v5 Phase 3: Run TFLite classifier on the same frame.
+        // Reuses the raw imageProxy buffer for a fresh bitmap (stairsBitmap was recycled above).
+        if (this::stairsClassifier.isInitialized && stairsClassifier.isAvailable) {
+            val rotDeg = imageProxy.imageInfo.rotationDegrees
+            val clsBitmap: Bitmap? = try {
+                val bmp = Bitmap.createBitmap(
+                    imageProxy.width, imageProxy.height, Bitmap.Config.ARGB_8888
+                )
+                val buf = imageProxy.planes[0].buffer
+                buf.rewind()
+                bmp.copyPixelsFromBuffer(buf)
+                buf.rewind()
+                bmp
+            } catch (e: Exception) {
+                Log.w(TAG, "Classifier bitmap copy failed: ${e.message}")
+                null
+            }
+            if (clsBitmap != null) {
+                val result = stairsClassifier.classify(clsBitmap, rotDeg)
+                clsBitmap.recycle()
+
+                if (result != null && isDebugOverlayVisible) {
+                    val labels = stairsClassifier.labels
+                    val probStr = labels.mapIndexed { i, l ->
+                        "$l=${"%0.2f".format(result.probs.getOrElse(i) { 0f })}"
+                    }.joinToString(" ")
+                    activity?.runOnUiThread {
+                        if (_fragmentCameraBinding != null) {
+                            val existing = fragmentCameraBinding.tvDebugLatency.text?.toString() ?: ""
+                            fragmentCameraBinding.tvDebugLatency.text =
+                                "$existing | cls ${result.inferenceMs}ms $probStr"
+                        }
+                    }
+                }
             }
         }
 
