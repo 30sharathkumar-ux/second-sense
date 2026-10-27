@@ -16,7 +16,9 @@
 package com.google.mediapipe.examples.objectdetection.fragments
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.res.Configuration
+import com.google.mediapipe.examples.objectdetection.DataCollectionActivity
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.os.SystemClock
@@ -101,7 +103,9 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
     private var testTapCount = 0
     private var testTapLastMs = 0L
     private val TEST_TAP_WINDOW_MS = 2000L
-    private val TEST_TAP_REQUIRED = 5
+    private val TEST_TAP_REQUIRED  = 5
+    /** stairs-v5: 7 rapid taps opens the data-collection screen. */
+    private val DATA_COLLECT_TAP_REQUIRED = 7
 
     /** Scanning active flag — controlled by the large UI toggle button */
     @Volatile
@@ -232,15 +236,24 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
             true
         }
 
-        // Step 8: 5 rapid taps on the status badge reveal the test mode panel
+        // Step 8 / stairs-v5: tap counter on status badge
+        // 5 taps  → test overlay
+        // 7 taps  → DataCollectionActivity (hidden data-collection screen)
         fragmentCameraBinding.layoutStatus.setOnClickListener {
             val now = System.currentTimeMillis()
             if (now - testTapLastMs > TEST_TAP_WINDOW_MS) testTapCount = 0
             testTapLastMs = now
             testTapCount++
-            if (testTapCount >= TEST_TAP_REQUIRED) {
-                testTapCount = 0
-                showTestMode()
+            when {
+                testTapCount >= DATA_COLLECT_TAP_REQUIRED -> {
+                    testTapCount = 0
+                    Log.i(TAG, "Opening DataCollectionActivity (7-tap)")
+                    startActivity(Intent(requireContext(), DataCollectionActivity::class.java))
+                }
+                testTapCount >= TEST_TAP_REQUIRED -> {
+                    testTapCount = 0
+                    showTestMode()
+                }
             }
         }
 

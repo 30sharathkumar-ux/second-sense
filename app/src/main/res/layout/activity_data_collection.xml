@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FF000000">
+
+    <!-- Camera preview -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/viewFinder"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Crop guide overlay: shows the 224x224 lower-centre square -->
+    <View
+        android:id="@+id/cropGuide"
+        android:layout_width="224dp"
+        android:layout_height="224dp"
+        android:layout_gravity="center_horizontal|bottom"
+        android:layout_marginBottom="80dp"
+        android:background="@android:color/transparent"
+        android:foreground="@android:color/transparent" />
+
+    <!-- Top bar: session info and counts -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:background="#AA000000"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <TextView
+            android:id="@+id/tvSessionId"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Session: —"
+            android:textColor="#FFFFFFFF"
+            android:textSize="13sp"
+            android:fontFamily="monospace" />
+
+        <TextView
+            android:id="@+id/tvCounts"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="stairs_up: 0 | stairs_down: 0 | none: 0"
+            android:textColor="#FF4FC3F7"
+            android:textSize="15sp"
+            android:fontFamily="monospace"
+            android:layout_marginTop="4dp" />
+
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Tap a button to capture"
+            android:textColor="#FFCCCCCC"
+            android:textSize="12sp"
+            android:layout_marginTop="2dp" />
+    </LinearLayout>
+
+    <!-- Bottom panel: 3 big capture buttons + auto toggle -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="#CC000000"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <!-- Auto-capture toggle -->
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/switchAuto"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:text="Auto-capture while held (2 fps)"
+            android:textColor="#FFFFFFFF"
+            android:checked="false"
+            android:layout_marginBottom="8dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnStairsUp"
+                android:layout_width="0dp"
+                android:layout_height="80dp"
+                android:layout_weight="1"
+                android:layout_margin="4dp"
+                android:text="STAIRS\nUP"
+                android:textSize="14sp"
+                android:backgroundTint="#FF43A047"
+                app:cornerRadius="12dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnStairsDown"
+                android:layout_width="0dp"
+                android:layout_height="80dp"
+                android:layout_weight="1"
+                android:layout_margin="4dp"
+                android:text="STAIRS\nDOWN"
+                android:textSize="14sp"
+                android:backgroundTint="#FFE53935"
+                app:cornerRadius="12dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnNone"
+                android:layout_width="0dp"
+                android:layout_height="80dp"
+                android:layout_weight="1"
+                android:layout_margin="4dp"
+                android:text="NONE"
+                android:textSize="14sp"
+                android:backgroundTint="#FF757575"
+                app:cornerRadius="12dp" />
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnClose"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="8dp"
+            android:text="CLOSE"
+            android:textSize="12sp"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:textColor="#FFAAAAAA" />
+    </LinearLayout>
+
+</FrameLayout>
