@@ -65,7 +65,6 @@ android {
             includeAndroidResources = false
         }
     }
-
 }
 
 // import DownloadModels task
